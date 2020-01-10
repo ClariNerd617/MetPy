@@ -8,7 +8,7 @@
   
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   
-  <title>potential_vorticity_baroclinic &mdash; MetPy 0.11.1</title>
+  <title>potential_vorticity_baroclinic &mdash; MetPy 0.12.0</title>
   
 
   
@@ -43,7 +43,7 @@
         <link rel="index" title="Index"
               href="../../genindex.html"/>
         <link rel="search" title="Search" href="../../search.html"/>
-    <link rel="top" title="MetPy 0.11.1" href="../../index.html"/>
+    <link rel="top" title="MetPy 0.12.0" href="../../index.html"/>
         <link rel="up" title="calc" href="metpy.calc.html"/>
         <link rel="next" title="potential_vorticity_barotropic" href="metpy.calc.potential_vorticity_barotropic.html"/>
         <link rel="prev" title="montgomery_streamfunction" href="metpy.calc.montgomery_streamfunction.html"/> 
@@ -81,7 +81,7 @@
                 
                   <div class="version-dropdown">
                     <select class="version-list" id="version-list">
-                      <option value=''>0.11.1</option>
+                      <option value=''>0.12.0</option>
                       
                         
                           <option value="../latest">latest</option>
@@ -263,19 +263,19 @@
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>potential_temperature</strong> ((P, M, N) <em class="xref py py-obj">pint.Quantity</em>) – potential temperature</p></li>
-<li><p><strong>pressure</strong> ((P, M, N) <em class="xref py py-obj">pint.Quantity</em>) – vertical pressures</p></li>
-<li><p><strong>u</strong> ((P, M, N) <em class="xref py py-obj">pint.Quantity</em>) – x component of the wind</p></li>
-<li><p><strong>v</strong> ((P, M, N) <em class="xref py py-obj">pint.Quantity</em>) – y component of the wind</p></li>
-<li><p><strong>dx</strong> (<em class="xref py py-obj">pint.Quantity</em>) – The grid spacing(s) in the x-direction. If an array, there should be one item less than
+<li><p><strong>potential_temperature</strong> ((P, M, N) <code class="xref py py-obj docutils literal notranslate"><span class="pre">pint.Quantity</span></code>) – potential temperature</p></li>
+<li><p><strong>pressure</strong> ((P, M, N) <code class="xref py py-obj docutils literal notranslate"><span class="pre">pint.Quantity</span></code>) – vertical pressures</p></li>
+<li><p><strong>u</strong> ((P, M, N) <code class="xref py py-obj docutils literal notranslate"><span class="pre">pint.Quantity</span></code>) – x component of the wind</p></li>
+<li><p><strong>v</strong> ((P, M, N) <code class="xref py py-obj docutils literal notranslate"><span class="pre">pint.Quantity</span></code>) – y component of the wind</p></li>
+<li><p><strong>dx</strong> (<code class="xref py py-obj docutils literal notranslate"><span class="pre">pint.Quantity</span></code>) – The grid spacing(s) in the x-direction. If an array, there should be one item less than
 the size of <em class="xref py py-obj">u</em> along the applicable axis.</p></li>
-<li><p><strong>dy</strong> (<em class="xref py py-obj">pint.Quantity</em>) – The grid spacing(s) in the y-direction. If an array, there should be one item less than
+<li><p><strong>dy</strong> (<code class="xref py py-obj docutils literal notranslate"><span class="pre">pint.Quantity</span></code>) – The grid spacing(s) in the y-direction. If an array, there should be one item less than
 the size of <em class="xref py py-obj">u</em> along the applicable axis.</p></li>
 <li><p><strong>lats</strong> (<em>(</em><em>M</em><em>, </em><em>N</em><em>) </em><em>ndarray</em>) – latitudes of the wind data in radians or with appropriate unit information attached</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
-<dd class="field-even"><p>(P, M, N) <em class="xref py py-obj">pint.Quantity</em> – baroclinic potential vorticity</p>
+<dd class="field-even"><p>(P, M, N) <code class="xref py py-obj docutils literal notranslate"><span class="pre">pint.Quantity</span></code> – baroclinic potential vorticity</p>
 </dd>
 </dl>
 <p class="rubric">Notes</p>
@@ -318,7 +318,7 @@ one-dimensional p[:, None, None] can be used to make it appear multi-dimensional
   <div role="contentinfo">
     <p>
         &copy; Copyright 2019, MetPy Developers. Development supported by National Science Foundation grants AGS-1344155, OAC-1740315, and AGS-1901712..
-      Last updated on Jan 06, 2020 at 00:03:05.
+      Last updated on Jan 10, 2020 at 03:56:10.
 
     </p>
   </div>
@@ -355,7 +355,7 @@ one-dimensional p[:, None, None] can be used to make it appear multi-dimensional
     <script type="text/javascript">
         var DOCUMENTATION_OPTIONS = {
             URL_ROOT:'../../',
-            VERSION:'0.11.1.post152+ge56e12d',
+            VERSION:'0.12.0.post6+gce7b25f',
             LANGUAGE:'None',
             COLLAPSE_INDEX:false,
             FILE_SUFFIX:'.html',
