@@ -8,19 +8,22 @@ from collections import namedtuple
 import numpy as np
 import numpy.ma as ma
 import pandas as pd
+from pyproj import Geod
 import pytest
 import xarray as xr
 
 from metpy.calc import (angle_to_direction, find_bounding_indices, find_intersections,
                         first_derivative, get_layer, get_layer_heights, gradient,
-                        grid_deltas_from_dataarray, laplacian, lat_lon_grid_deltas,
-                        nearest_intersection_idx, parse_angle, pressure_to_height_std,
-                        reduce_point_density, resample_nn_1d, second_derivative)
+                        laplacian, lat_lon_grid_deltas, nearest_intersection_idx, parse_angle,
+                        pressure_to_height_std, reduce_point_density, resample_nn_1d,
+                        second_derivative)
 from metpy.calc.tools import (_delete_masked_points, _get_bound_pressure_height,
                               _greater_or_close, _less_or_close, _next_non_masked_element,
-                              _remove_nans, BASE_DEGREE_MULTIPLIER, DIR_STRS, UND)
+                              _remove_nans, azimuth_range_to_lat_lon, BASE_DEGREE_MULTIPLIER,
+                              DIR_STRS, UND)
 from metpy.testing import (assert_almost_equal, assert_array_almost_equal, assert_array_equal)
 from metpy.units import units
+from metpy.xarray import grid_deltas_from_dataarray
 
 
 FULL_CIRCLE_DEGREES = np.arange(0, 360, BASE_DEGREE_MULTIPLIER.m) * units.degree
@@ -242,8 +245,8 @@ def get_bounds_data():
 ])
 def test_get_bound_pressure_height(pressure, bound, hgts, interp, expected):
     """Test getting bounds in layers with various parameter combinations."""
-    bounds = _get_bound_pressure_height(pressure, bound, heights=hgts, interpolate=interp)
-    assert_array_almost_equal(bounds[0], expected[0], 4)
+    bounds = _get_bound_pressure_height(pressure, bound, height=hgts, interpolate=interp)
+    assert_array_almost_equal(bounds[0], expected[0], 2)
     assert_array_almost_equal(bounds[1], expected[1], 4)
 
 
@@ -268,9 +271,9 @@ def test_get_bound_height_out_of_range():
     p = np.arange(900, 300, -100) * units.hPa
     h = np.arange(1, 7) * units.kilometer
     with pytest.raises(ValueError):
-        _get_bound_pressure_height(p, 8 * units.kilometer, heights=h)
+        _get_bound_pressure_height(p, 8 * units.kilometer, height=h)
     with pytest.raises(ValueError):
-        _get_bound_pressure_height(p, 100 * units.meter, heights=h)
+        _get_bound_pressure_height(p, 100 * units.meter, height=h)
 
 
 @pytest.mark.parametrize('flip_order', [(True, False)])
@@ -289,9 +292,29 @@ def test_get_layer_float32(flip_order):
     if flip_order:
         p = p[::-1]
         hgt = hgt[::-1]
-    p_layer, hgt_layer = get_layer(p, hgt, heights=hgt, depth=1000. * units.meter)
+    p_layer, hgt_layer = get_layer(p, hgt, height=hgt, depth=1000. * units.meter)
     assert_array_almost_equal(p_layer, true_p_layer, 4)
     assert_array_almost_equal(hgt_layer, true_hgt_layer, 4)
+
+
+def test_get_layer_float32_no_heights():
+    """Test that get_layer works with float32 data when not given heights."""
+    p = np.array([1017.695312, 1010.831787, 1002.137207, 991.189453, 977.536194, 960.655212,
+                  940.116455, 915.509521, 886.550415], dtype=np.float32) * units.hPa
+    u = np.array([0.205419, 0.206133, -0.354010, -1.586414, -2.660765, -3.740533,
+                  -3.297433, 1.049471, 5.610486], dtype=np.float32) * units('m/s')
+    v = np.array([6.491890, 8.920976, 13.959625, 18.398054, 21.416298, 23.190233,
+                  23.028181, 20.971205, 19.243179], dtype=np.float32) * units('m/s')
+
+    p_l, u_l, v_l = get_layer(p, u, v, depth=1000 * units.meter)
+    assert_array_equal(p_l[:-1], p[:-1])
+    assert_array_almost_equal(u_l[:-1], u[:-1], 7)
+    assert_almost_equal(u_l[-1], 3.0455916 * units('m/s'), 4)
+    assert_array_almost_equal(v_l[:-1], v[:-1], 7)
+    assert_almost_equal(v_l[-1], 20.2149378 * units('m/s'), 4)
+    assert p_l.dtype == p.dtype
+    assert u_l.dtype == u.dtype
+    assert v_l.dtype == v.dtype
 
 
 def test_get_layer_ragged_data():
@@ -329,10 +352,10 @@ def layer_test_data():
 ])
 def test_get_layer(pressure, variable, heights, bottom, depth, interp, expected):
     """Test get_layer functionality."""
-    p_layer, y_layer = get_layer(pressure, variable, heights=heights, bottom=bottom,
+    p_layer, y_layer = get_layer(pressure, variable, height=heights, bottom=bottom,
                                  depth=depth, interpolate=interp)
-    assert_array_almost_equal(p_layer, expected[0], 4)
-    assert_array_almost_equal(y_layer, expected[1], 4)
+    assert_array_almost_equal(p_layer, expected[0], 2)
+    assert_array_almost_equal(y_layer, expected[1], 3)
 
 
 def test_greater_or_close():
@@ -488,6 +511,23 @@ def test_lat_lon_grid_deltas_mismatched_shape():
         lat_lon_grid_deltas(lon, lat)
 
 
+def test_lat_lon_grid_deltas_geod_kwargs():
+    """Test that geod kwargs are overridden by users #774."""
+    lat = np.arange(40, 50, 2.5)
+    lon = np.arange(-100, -90, 2.5)
+    dx, dy = lat_lon_grid_deltas(lon, lat, geod=Geod(a=4370997))
+    dx_truth = np.array([[146095.76101984, 146095.76101984, 146095.76101984],
+                         [140608.9751528, 140608.9751528, 140608.9751528],
+                         [134854.56713287, 134854.56713287, 134854.56713287],
+                         [128843.49645823, 128843.49645823, 128843.49645823]]) * units.meter
+    dy_truth = np.array([[190720.72311199, 190720.72311199, 190720.72311199, 190720.72311199],
+                         [190720.72311199, 190720.72311199, 190720.72311199, 190720.72311199],
+                         [190720.72311199, 190720.72311199, 190720.72311199,
+                          190720.72311199]]) * units.meter
+    assert_almost_equal(dx, dx_truth, 4)
+    assert_almost_equal(dy, dy_truth, 4)
+
+
 @pytest.fixture()
 def deriv_1d_data():
     """Return 1-dimensional data for testing derivative functions."""
@@ -554,6 +594,20 @@ def test_first_derivative_masked():
 
     truth = np.ma.array([1., 1., 1., 1., 1., 1., 1.],
                         mask=[False, False, True, True, True, False, False])
+    assert_array_almost_equal(df_dx, truth)
+    assert_array_equal(df_dx.mask, truth.mask)
+
+
+def test_first_derivative_masked_units():
+    """Test that first_derivative properly propagates masks with units."""
+    data = units('K') * np.ma.arange(7)
+    data[3] = np.ma.masked
+    x = units('m') * np.ma.arange(7)
+    df_dx = first_derivative(data, x=x)
+
+    truth = units('K / m') * np.ma.array(
+        [1., 1., 1., 1., 1., 1., 1.],
+        mask=[False, False, True, True, True, False, False])
     assert_array_almost_equal(df_dx, truth)
     assert_array_equal(df_dx.mask, truth.mask)
 
@@ -836,6 +890,68 @@ def test_angle_to_direction_level_1():
     assert_array_equal(output_dirs, expected_dirs)
 
 
+def test_azimuth_range_to_lat_lon():
+    """Test conversion of azimuth and range to lat/lon grid."""
+    az = [332.2403, 334.6765, 337.2528, 339.73846, 342.26257]
+    rng = [2125., 64625., 127125., 189625., 252125., 314625.]
+    clon = -89.98416666666667
+    clat = 32.27972222222222
+    output_lon, output_lat = azimuth_range_to_lat_lon(az, rng, clon, clat)
+    true_lon = [[-89.9946968, -90.3061798, -90.6211612, -90.9397425, -91.2620282,
+                -91.5881257],
+                [-89.9938369, -90.2799198, -90.5692874, -90.8620385, -91.1582743,
+                -91.4580996],
+                [-89.9929086, -90.251559, -90.5132417, -90.7780507, -91.0460827,
+                -91.3174374],
+                [-89.9919961, -90.2236737, -90.4581161, -90.6954113, -90.9356497,
+                -91.178925],
+                [-89.9910545, -90.1948876, -90.4011921, -90.6100481, -90.8215385,
+                -91.0357492]]
+    true_lat = [[32.2966329, 32.7936114, 33.2898102, 33.7852055, 34.2797726,
+                34.773486],
+                [32.2969961, 32.804717, 33.3117799, 33.8181643, 34.3238488,
+                34.8288114],
+                [32.2973461, 32.8154229, 33.3329617, 33.8499452, 34.3663556,
+                34.8821746],
+                [32.29765, 32.8247204, 33.3513589, 33.8775516, 34.4032838,
+                34.9285404],
+                [32.2979242, 32.8331062, 33.367954, 33.9024562, 34.4366016,
+                34.9703782]]
+    assert_array_almost_equal(output_lon, true_lon, 6)
+    assert_array_almost_equal(output_lat, true_lat, 6)
+
+
+def test_azimuth_range_to_lat_lon_diff_ellps():
+    """Test conversion of azimuth and range to lat/lon grid."""
+    az = [332.2403, 334.6765, 337.2528, 339.73846, 342.26257]
+    rng = [2125., 64625., 127125., 189625., 252125., 314625.]
+    clon = -89.98416666666667
+    clat = 32.27972222222222
+    output_lon, output_lat = azimuth_range_to_lat_lon(az, rng, clon, clat, Geod(ellps='WGS84'))
+    true_lon = [[-89.9946749, -90.3055083, -90.6198256, -90.9377279, -91.2593193,
+                -91.5847066],
+                [-89.9938168, -90.279303, -90.5680603, -90.860187, -91.1557841,
+                -91.4549558],
+                [-89.9928904, -90.2510012, -90.5121319, -90.7763758, -91.0438294,
+                -91.3145919],
+                [-89.9919799, -90.2231741, -90.4571217, -90.6939102, -90.9336298,
+                -91.1763737],
+                [-89.9910402, -90.194448, -90.4003169, -90.6087268, -90.8197603,
+                -91.0335027]]
+    true_lat = [[32.2966791, 32.794996, 33.2924932, 33.7891466, 34.2849315,
+                34.7798223],
+                [32.2970433, 32.8061309, 33.3145188, 33.8221862, 34.3291116,
+                34.835273],
+                [32.2973942, 32.816865, 33.3357544, 33.8540448, 34.3717184,
+                34.8887564],
+                [32.297699, 32.826187, 33.3541984, 33.8817186, 34.4087331,
+                34.9352264],
+                [32.2979739, 32.834595, 33.3708355, 33.906684, 34.4421288,
+                34.9771578]]
+    assert_array_almost_equal(output_lon, true_lon, 6)
+    assert_array_almost_equal(output_lat, true_lat, 6)
+
+
 def test_3d_gradient_3d_data_no_axes(deriv_4d_data):
     """Test 3D gradient with 3D data and no axes parameter."""
     test = deriv_4d_data[0]
@@ -881,113 +997,6 @@ def test_2d_gradient_4d_data_2_axes_1_deltas(deriv_4d_data):
     assert 'cannot be less than that of "axes"' in str(exc.value)
 
 
-@pytest.fixture()
-def test_da_lonlat():
-    """Return a DataArray with a lon/lat grid and no time coordinate for use in tests."""
-    data = np.linspace(300, 250, 3 * 4 * 4).reshape((3, 4, 4))
-    ds = xr.Dataset(
-        {'temperature': (['isobaric', 'lat', 'lon'], data)},
-        coords={
-            'isobaric': xr.DataArray(
-                np.array([850., 700., 500.]),
-                name='isobaric',
-                dims=['isobaric'],
-                attrs={'units': 'hPa'}
-            ),
-            'lat': xr.DataArray(
-                np.linspace(30, 40, 4),
-                name='lat',
-                dims=['lat'],
-                attrs={'units': 'degrees_north'}
-            ),
-            'lon': xr.DataArray(
-                np.linspace(260, 270, 4),
-                name='lon',
-                dims=['lon'],
-                attrs={'units': 'degrees_east'}
-            )
-        }
-    )
-    ds['temperature'].attrs['units'] = 'kelvin'
-
-    return ds.metpy.parse_cf('temperature')
-
-
-@pytest.fixture()
-def test_da_xy():
-    """Return a DataArray with a x/y grid and a time coordinate for use in tests."""
-    data = np.linspace(300, 250, 3 * 3 * 4 * 4).reshape((3, 3, 4, 4))
-    ds = xr.Dataset(
-        {'temperature': (['time', 'isobaric', 'y', 'x'], data),
-         'lambert_conformal': ([], '')},
-        coords={
-            'time': xr.DataArray(
-                np.array([np.datetime64('2018-07-01T00:00'),
-                          np.datetime64('2018-07-01T06:00'),
-                          np.datetime64('2018-07-01T12:00')]),
-                name='time',
-                dims=['time']
-            ),
-            'isobaric': xr.DataArray(
-                np.array([850., 700., 500.]),
-                name='isobaric',
-                dims=['isobaric'],
-                attrs={'units': 'hPa'}
-            ),
-            'y': xr.DataArray(
-                np.linspace(-1000, 500, 4),
-                name='y',
-                dims=['y'],
-                attrs={'units': 'km'}
-            ),
-            'x': xr.DataArray(
-                np.linspace(0, 1500, 4),
-                name='x',
-                dims=['x'],
-                attrs={'units': 'km'}
-            )
-        }
-    )
-    ds['temperature'].attrs = {
-        'units': 'kelvin',
-        'grid_mapping': 'lambert_conformal'
-    }
-    ds['lambert_conformal'].attrs = {
-        'grid_mapping_name': 'lambert_conformal_conic',
-        'standard_parallel': 50.0,
-        'longitude_of_central_meridian': -107.0,
-        'latitude_of_projection_origin': 50.0,
-        'earth_shape': 'spherical',
-        'earth_radius': 6367470.21484375
-    }
-
-    return ds.metpy.parse_cf('temperature')
-
-
-def test_grid_deltas_from_dataarray_lonlat(test_da_lonlat):
-    """Test grid_deltas_from_dataarray with a lonlat grid."""
-    dx, dy = grid_deltas_from_dataarray(test_da_lonlat)
-    true_dx = np.array([[[321609.59212064, 321609.59212065, 321609.59212064],
-                         [310320.85961483, 310320.85961483, 310320.85961483],
-                         [297980.72966733, 297980.72966733, 297980.72966733],
-                         [284629.6008561, 284629.6008561, 284629.6008561]]]) * units.m
-    true_dy = np.array([[[369603.78775948, 369603.78775948, 369603.78775948, 369603.78775948],
-                         [369802.28173967, 369802.28173967, 369802.28173967, 369802.28173967],
-                         [370009.56291098, 370009.56291098, 370009.56291098,
-                          370009.56291098]]]) * units.m
-    assert_array_almost_equal(dx, true_dx, 5)
-    assert_array_almost_equal(dy, true_dy, 5)
-
-
-def test_grid_deltas_from_dataarray_xy(test_da_xy):
-    """Test grid_deltas_from_dataarray with a xy grid."""
-    dx, dy = grid_deltas_from_dataarray(test_da_xy)
-    true_dx = np.array([[[[500] * 3]]]) * units('km')
-    true_dy = np.array([[[[500]] * 3]]) * units('km')
-    assert_array_almost_equal(dx, true_dx, 5)
-    assert_array_almost_equal(dy, true_dy, 5)
-
-
 def test_first_derivative_xarray_lonlat(test_da_lonlat):
     """Test first derivative with an xarray.DataArray on a lonlat grid in each axis usage."""
     deriv = first_derivative(test_da_lonlat, axis='lon')  # dimension coordinate name
@@ -1000,8 +1009,9 @@ def test_first_derivative_xarray_lonlat(test_da_lonlat):
         coords=(('lat', test_da_lonlat['lat']),)
     )
     _, truth = xr.broadcast(test_da_lonlat, partial)
-    truth.coords['crs'] = test_da_lonlat['crs']
+    truth.coords['metpy_crs'] = test_da_lonlat['metpy_crs']
     truth.attrs['units'] = 'kelvin / meter'
+    truth = truth.metpy.quantify()
 
     # Assert result matches expectation
     xr.testing.assert_allclose(deriv, truth)
@@ -1017,6 +1027,7 @@ def test_first_derivative_xarray_time_and_default_axis(test_da_xy):
     deriv = first_derivative(test_da_xy)
     truth = xr.full_like(test_da_xy, -0.000777000777)
     truth.attrs['units'] = 'kelvin / second'
+    truth = truth.metpy.quantify()
 
     xr.testing.assert_allclose(deriv, truth)
     assert deriv.metpy.units == truth.metpy.units
@@ -1036,6 +1047,7 @@ def test_first_derivative_xarray_time_subsecond_precision():
 
     truth = xr.full_like(test_da, 5.)
     truth.attrs['units'] = 'kelvin / second'
+    truth = truth.metpy.quantify()
 
     xr.testing.assert_allclose(deriv, truth)
     assert deriv.metpy.units == truth.metpy.units
@@ -1051,8 +1063,9 @@ def test_second_derivative_xarray_lonlat(test_da_lonlat):
         coords=(('lat', test_da_lonlat['lat']),)
     )
     _, truth = xr.broadcast(test_da_lonlat, partial)
-    truth.coords['crs'] = test_da_lonlat['crs']
+    truth.coords['metpy_crs'] = test_da_lonlat['metpy_crs']
     truth.attrs['units'] = 'kelvin / meter^2'
+    truth = truth.metpy.quantify()
 
     xr.testing.assert_allclose(deriv, truth)
     assert deriv.metpy.units == truth.metpy.units
@@ -1067,17 +1080,20 @@ def test_gradient_xarray(test_da_xy):
 
     truth_x = xr.full_like(test_da_xy, -6.993007e-07)
     truth_x.attrs['units'] = 'kelvin / meter'
+    truth_x = truth_x.metpy.quantify()
 
     truth_y = xr.full_like(test_da_xy, -2.797203e-06)
     truth_y.attrs['units'] = 'kelvin / meter'
+    truth_y = truth_y.metpy.quantify()
 
     partial = xr.DataArray(
         np.array([0.04129204, 0.03330003, 0.02264402]),
         coords=(('isobaric', test_da_xy['isobaric']),)
     )
     _, truth_p = xr.broadcast(test_da_xy, partial)
-    truth_p.coords['crs'] = test_da_xy['crs']
+    truth_p.coords['metpy_crs'] = test_da_xy['metpy_crs']
     truth_p.attrs['units'] = 'kelvin / hectopascal'
+    truth_p = truth_p.metpy.quantify()
 
     # Assert results match expectations
     xr.testing.assert_allclose(deriv_x, truth_x)
@@ -1103,9 +1119,44 @@ def test_gradient_xarray_implicit_axes(test_da_xy):
 
     truth_x = xr.full_like(data, -6.993007e-07)
     truth_x.attrs['units'] = 'kelvin / meter'
+    truth_x = truth_x.metpy.quantify()
 
     truth_y = xr.full_like(data, -2.797203e-06)
     truth_y.attrs['units'] = 'kelvin / meter'
+    truth_y = truth_y.metpy.quantify()
+
+    xr.testing.assert_allclose(deriv_x, truth_x)
+    assert deriv_x.metpy.units == truth_x.metpy.units
+
+    xr.testing.assert_allclose(deriv_y, truth_y)
+    assert deriv_y.metpy.units == truth_y.metpy.units
+
+
+def test_gradient_xarray_implicit_axes_transposed(test_da_lonlat):
+    """Test the 2D gradient with no axes specified but in x/y order."""
+    test_da = test_da_lonlat.isel(isobaric=0).transpose('lon', 'lat')
+    deriv_x, deriv_y = gradient(test_da)
+
+    truth_x = xr.DataArray(
+        np.array(
+            [[-3.30782978e-06, -3.42816074e-06, -3.57012948e-06, -3.73759364e-06],
+             [-3.30782978e-06, -3.42816074e-06, -3.57012948e-06, -3.73759364e-06],
+             [-3.30782978e-06, -3.42816074e-06, -3.57012948e-06, -3.73759364e-06],
+             [-3.30782978e-06, -3.42816074e-06, -3.57012948e-06, -3.73759364e-06]]
+        ) * units('kelvin / meter'),
+        dims=test_da.dims,
+        coords=test_da.coords
+    )
+    truth_y = xr.DataArray(
+        np.array(
+            [[-1.15162805e-05, -1.15101023e-05, -1.15037894e-05, -1.14973413e-05],
+             [-1.15162805e-05, -1.15101023e-05, -1.15037894e-05, -1.14973413e-05],
+             [-1.15162805e-05, -1.15101023e-05, -1.15037894e-05, -1.14973413e-05],
+             [-1.15162805e-05, -1.15101023e-05, -1.15037894e-05, -1.14973413e-05]]
+        ) * units('kelvin / meter'),
+        dims=test_da.dims,
+        coords=test_da.coords
+    )
 
     xr.testing.assert_allclose(deriv_x, truth_x)
     assert deriv_x.metpy.units == truth_x.metpy.units
@@ -1124,8 +1175,9 @@ def test_laplacian_xarray_lonlat(test_da_lonlat):
         coords=(('lat', test_da_lonlat['lat']),)
     )
     _, truth = xr.broadcast(test_da_lonlat, partial)
-    truth.coords['crs'] = test_da_lonlat['crs']
+    truth.coords['metpy_crs'] = test_da_lonlat['metpy_crs']
     truth.attrs['units'] = 'kelvin / meter^2'
+    truth = truth.metpy.quantify()
 
     xr.testing.assert_allclose(laplac, truth)
     assert laplac.metpy.units == truth.metpy.units

@@ -14,10 +14,7 @@ import re
 import numpy as np
 from xarray import Variable
 from xarray.backends.common import AbstractDataStore
-try:
-    from xarray.core.utils import FrozenDict
-except ImportError:
-    from xarray.core.utils import FrozenOrderedDict as FrozenDict
+from xarray.core.utils import FrozenDict
 
 from ._tools import Bits, IOBuffer, NamedStruct, open_as_needed, zlib_decompress_all_frames
 from ..package_tools import Exporter
@@ -52,7 +49,7 @@ def _name_lookup(names):
     mapper = dict(zip(range(len(names)), names))
 
     def lookup(val):
-        return mapper.get(val, 'Unknown')
+        return mapper.get(val, 'UnknownValue')
     return lookup
 
 
@@ -104,7 +101,8 @@ class GiniFile(AbstractDataStore):
                 'Sounder (9.71 micron)', 'Sounder (7.43 micron)', 'Sounder (7.02 micron)',
                 'Sounder (6.51 micron)', 'Sounder (4.57 micron)', 'Sounder (4.52 micron)',
                 'Sounder (4.45 micron)', 'Sounder (4.13 micron)', 'Sounder (3.98 micron)',
-                'Sounder (3.74 micron)', 'Sounder (Visible)']
+                # Percent Normal TPW found empirically from Service Change Notice 20-03
+                'Sounder (3.74 micron)', 'Sounder (Visible)', 'Percent Normal TPW']
 
     prod_desc_fmt = NamedStruct([('source', 'b'),
                                  ('creating_entity', 'b', _name_lookup(crafts)),
@@ -269,7 +267,7 @@ class GiniFile(AbstractDataStore):
             attrs['standard_parallel'] = prod_desc2.lat_in
         else:
             raise NotImplementedError(
-                'Unhandled GINI Projection: {}'.format(self.prod_desc.projection))
+                f'Unhandled GINI Projection: {self.prod_desc.projection}')
 
         return 'projection', Variable((), 0, attrs)
 
@@ -344,32 +342,6 @@ class GiniFile(AbstractDataStore):
 
         return [('x', x_var), ('y', y_var), ('lon', lon_var), ('lat', lat_var)]
 
-    # FIXME: Work around xarray <=0.10.3 docstring for load angering sphinx
-    # That's the only reason this exists.
-    def load(self):
-        """
-        Load the variables and attributes simultaneously.
-
-        A centralized loading function makes it easier to create
-        data stores that do automatic encoding/decoding.
-
-        For example::
-
-            class SuffixAppendingDataStore(AbstractDataStore):
-
-                def load(self):
-                    variables, attributes = AbstractDataStore.load(self)
-                    variables = {'%s_suffix' % k: v
-                                 for k, v in iteritems(variables)}
-                    attributes = {'%s_suffix' % k: v
-                                  for k, v in iteritems(attributes)}
-                    return variables, attributes
-
-        This function will be called anytime variables or attributes
-        are requested, so care should be taken to make sure its fast.
-        """
-        return super().load()
-
     def get_variables(self):
         """Get all variables in the file.
 
@@ -405,11 +377,3 @@ class GiniFile(AbstractDataStore):
         """
         return FrozenDict(satellite=self.prod_desc.creating_entity,
                           sector=self.prod_desc.sector_id)
-
-    def get_dimensions(self):
-        """Get the file's dimensions.
-
-        This is used by `xarray.open_dataset`.
-
-        """
-        return FrozenDict(x=self.prod_desc.nx, y=self.prod_desc.ny)

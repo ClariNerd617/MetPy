@@ -4,6 +4,7 @@
 """Pull out station metadata."""
 from collections import namedtuple
 
+import numpy as np
 import pandas as pd
 
 from ..cbook import get_test_data
@@ -33,7 +34,7 @@ def _read_station_table(input_file=None):
     """
     if input_file is None:
         input_file = get_test_data('sfstns.tbl', as_file_obj=False)
-    with open(input_file, 'rt') as station_file:
+    with open(input_file) as station_file:
         for line in station_file:
             stid = line[:9].strip()
             synop_id = int(line[9:16].strip())
@@ -55,7 +56,7 @@ def _read_master_text_file(input_file=None):
     """
     if input_file is None:
         input_file = get_test_data('master.txt', as_file_obj=False)
-    with open(input_file, 'rt') as station_file:
+    with open(input_file) as station_file:
         station_file.readline()
         for line in station_file:
             state = line[:3].strip()
@@ -84,7 +85,7 @@ def _read_station_text_file(input_file=None):
     """
     if input_file is None:
         input_file = get_test_data('stations.txt', as_file_obj=False)
-    with open(input_file, 'rt') as station_file:
+    with open(input_file) as station_file:
         for line in station_file:
             if line[0] == '!':
                 continue
@@ -133,8 +134,41 @@ class StationLookup:
         for table in self._sources:
             if stid in table:
                 return table[stid]
-        raise KeyError('No station information for {}'.format(stid))
+        raise KeyError(f'No station information for {stid}')
 
 
 with exporter:
     station_info = StationLookup()
+
+
+@exporter.export
+def add_station_lat_lon(df, stn_var):
+    """Lookup station information to add the station latitude and longitude to the DataFrame.
+
+    This function will add two columns to the DataFrame ('latitude' and 'longitude') after
+    looking up all unique station identifiers available in the DataFrame.
+
+    Parameters
+    ----------
+    df : `pandas.DataFrame`
+        The DataFrame that contains the station observations
+    stn_var : str
+        The string of the variable name that represents the station in the DataFrame. Common
+        examples are 'station', 'stid', and 'station_id'
+
+    Returns
+    -------
+    `pandas.DataFrame` that contains original Dataframe now with the latitude and longitude
+    values for each location found in `station_info`.
+    """
+    df['latitude'] = None
+    df['longitude'] = None
+    for stn in df[stn_var].unique():
+        try:
+            info = station_info[stn]
+            df.loc[df[stn_var] == stn, 'latitude'] = info.latitude
+            df.loc[df[stn_var] == stn, 'longitude'] = info.longitude
+        except KeyError:
+            df.loc[df[stn_var] == stn, 'latitude'] = np.nan
+            df.loc[df[stn_var] == stn, 'longitude'] = np.nan
+    return df

@@ -4,15 +4,17 @@
 """Test the `basic` module."""
 
 import numpy as np
+import pandas as pd
 import pytest
+import xarray as xr
 
 from metpy.calc import (add_height_to_pressure, add_pressure_to_height,
                         altimeter_to_sea_level_pressure, altimeter_to_station_pressure,
                         apparent_temperature, coriolis_parameter, geopotential_to_height,
                         heat_index, height_to_geopotential, height_to_pressure_std,
-                        pressure_to_height_std, sigma_to_pressure, smooth_gaussian,
-                        smooth_n_point, wind_components, wind_direction, wind_speed,
-                        windchill)
+                        pressure_to_height_std, sigma_to_pressure, smooth_circular,
+                        smooth_gaussian, smooth_n_point, smooth_rectangular, smooth_window,
+                        wind_components, wind_direction, wind_speed, windchill)
 from metpy.testing import (assert_almost_equal, assert_array_almost_equal, assert_array_equal)
 from metpy.units import units
 
@@ -76,6 +78,23 @@ def test_direction():
     true_dir = np.array([270., 225., 180., 0.]) * units.deg
 
     assert_array_almost_equal(true_dir, direc, 4)
+
+
+def test_direction_masked():
+    """Test calculating wind direction from masked wind components."""
+    mask = np.array([True, False, True, False])
+    u = np.array([4., 2., 0., 0.])
+    v = np.array([0., 2., 4., 0.])
+
+    u_masked = units.Quantity(np.ma.array(u, mask=mask), units('m/s'))
+    v_masked = units.Quantity(np.ma.array(v, mask=mask), units('m/s'))
+
+    direc = wind_direction(u_masked, v_masked)
+
+    true_dir = np.array([270., 225., 180., 0.])
+    true_dir_masked = units.Quantity(np.ma.array(true_dir, mask=mask), units.deg)
+
+    assert_array_almost_equal(true_dir_masked, direc, 4)
 
 
 def test_direction_with_north_and_calm():
@@ -274,8 +293,8 @@ def test_height_to_geopotential():
 def test_height_to_geopotential_32bit():
     """Test conversion to geopotential with 32-bit values."""
     heights = np.linspace(20597, 20598, 11, dtype=np.float32) * units.m
-    truth = np.array([201336.67, 201337.66, 201338.62, 201339.61, 201340.58, 201341.56,
-                      201342.53, 201343.52, 201344.48, 201345.44, 201346.42],
+    truth = np.array([201336.64, 201337.62, 201338.6, 201339.58, 201340.55, 201341.53,
+                      201342.5, 201343.48, 201344.45, 201345.44, 201346.39],
                      dtype=np.float32) * units('J/kg')
     assert_almost_equal(height_to_geopotential(heights), truth, 2)
 
@@ -351,7 +370,7 @@ def test_heights_to_pressure_basic():
 
 def test_pressure_to_heights_units():
     """Test that passing non-mbar units works."""
-    assert_almost_equal(pressure_to_height_std(29 * units.inHg), 262.859 * units.meter, 3)
+    assert_almost_equal(pressure_to_height_std(29 * units.inHg), 262.8498 * units.meter, 3)
 
 
 def test_coriolis_force():
@@ -366,13 +385,13 @@ def test_coriolis_force():
 def test_add_height_to_pressure():
     """Test the pressure at height above pressure calculation."""
     pressure = add_height_to_pressure(1000 * units.hPa, 877.17421094 * units.meter)
-    assert_almost_equal(pressure, 900 * units.hPa, 5)
+    assert_almost_equal(pressure, 900 * units.hPa, 2)
 
 
 def test_add_pressure_to_height():
     """Test the height at pressure above height calculation."""
     height = add_pressure_to_height(110.8286757 * units.m, 100 * units.hPa)
-    assert_almost_equal(height, 988.0028867 * units.meter, 3)
+    assert_almost_equal(height, 987.971601 * units.meter, 3)
 
 
 def test_sigma_to_pressure():
@@ -608,6 +627,32 @@ def test_smooth_n_pt_wrong_number():
         smooth_n_point(hght, 7)
 
 
+def test_smooth_n_pt_3d_units():
+    """Test the smooth_n_point function with a 3D array with units."""
+    hght = [[[5640.0, 5640.0, 5640.0, 5640.0, 5640.0],
+             [5684.0, 5676.0, 5666.0, 5659.0, 5651.0],
+             [5728.0, 5712.0, 5692.0, 5678.0, 5662.0],
+             [5772.0, 5748.0, 5718.0, 5697.0, 5673.0],
+             [5816.0, 5784.0, 5744.0, 5716.0, 5684.0]],
+            [[6768.0, 6768.0, 6768.0, 6768.0, 6768.0],
+             [6820.8, 6811.2, 6799.2, 6790.8, 6781.2],
+             [6873.6, 6854.4, 6830.4, 6813.6, 6794.4],
+             [6926.4, 6897.6, 6861.6, 6836.4, 6807.6],
+             [6979.2, 6940.8, 6892.8, 6859.2, 6820.8]]] * units.m
+    shght = smooth_n_point(hght, 9, 2)
+    s_true = [[[5640., 5640., 5640., 5640., 5640.],
+               [5684., 5675.4375, 5666.9375, 5658.8125, 5651.],
+               [5728., 5710.875, 5693.875, 5677.625, 5662.],
+               [5772., 5746.375, 5720.625, 5696.375, 5673.],
+               [5816., 5784., 5744., 5716., 5684.]],
+              [[6768., 6768., 6768., 6768., 6768.],
+               [6820.8, 6810.525, 6800.325, 6790.575, 6781.2],
+               [6873.6, 6853.05, 6832.65, 6813.15, 6794.4],
+               [6926.4, 6895.65, 6864.75, 6835.65, 6807.6],
+               [6979.2, 6940.8, 6892.8, 6859.2, 6820.8]]] * units.m
+    assert_array_almost_equal(shght, s_true)
+
+
 def test_smooth_n_pt_temperature():
     """Test the smooth_n_pt function with temperature units."""
     t = np.array([[2.73, 3.43, 6.53, 7.13, 4.83],
@@ -642,12 +687,85 @@ def test_smooth_gaussian_temperature():
     assert_array_almost_equal(smooth_t, smooth_t_true, 4)
 
 
+def test_smooth_window():
+    """Test smooth_window with default configuration."""
+    hght = [[5640., 5640., 5640., 5640., 5640.],
+            [5684., 5676., 5666., 5659., 5651.],
+            [5728., 5712., 5692., 5678., 5662.],
+            [5772., 5748., 5718., 5697., 5673.],
+            [5816., 5784., 5744., 5716., 5684.]] * units.m
+    smoothed = smooth_window(hght, np.array([[1, 0, 1], [0, 0, 0], [1, 0, 1]]))
+    truth = [[5640., 5640., 5640., 5640., 5640.],
+             [5684., 5675., 5667.5, 5658.5, 5651.],
+             [5728., 5710., 5695., 5677., 5662.],
+             [5772., 5745., 5722.5, 5695.5, 5673.],
+             [5816., 5784., 5744., 5716., 5684.]] * units.m
+    assert_array_almost_equal(smoothed, truth)
+
+
+def test_smooth_window_1d_dataarray():
+    """Test smooth_window on 1D DataArray."""
+    temperature = xr.DataArray(
+        [37., 32., 34., 29., 28., 24., 26., 24., 27., 30.],
+        dims=('time',),
+        coords={'time': pd.date_range('2020-01-01', periods=10, freq='H')},
+        attrs={'units': 'degF'})
+    smoothed = smooth_window(temperature, window=np.ones(3) / 3, normalize_weights=False)
+    truth = xr.DataArray(
+        [37., 34.33333333, 31.66666667, 30.33333333, 27., 26., 24.66666667,
+         25.66666667, 27., 30.] * units.degF,
+        dims=('time',),
+        coords={'time': pd.date_range('2020-01-01', periods=10, freq='H')}
+    )
+    xr.testing.assert_allclose(smoothed, truth)
+
+
+def test_smooth_rectangular():
+    """Test smooth_rectangular with default configuration."""
+    hght = [[5640., 5640., 5640., 5640., 5640.],
+            [5684., 5676., 5666., 5659., 5651.],
+            [5728., 5712., 5692., 5678., 5662.],
+            [5772., 5748., 5718., 5697., 5673.],
+            [5816., 5784., 5744., 5716., 5684.]] * units.m
+    smoothed = smooth_rectangular(hght, (5, 3))
+    truth = [[5640., 5640., 5640., 5640., 5640.],
+             [5684., 5676., 5666., 5659., 5651.],
+             [5728., 5710.66667, 5694., 5677.33333, 5662.],
+             [5772., 5748., 5718., 5697., 5673.],
+             [5816., 5784., 5744., 5716., 5684.]] * units.m
+    assert_array_almost_equal(smoothed, truth, 4)
+
+
+def test_smooth_circular():
+    """Test smooth_circular with default configuration."""
+    hght = [[5640., 5640., 5640., 5640., 5640.],
+            [5684., 5676., 5666., 5659., 5651.],
+            [5728., 5712., 5692., 5678., 5662.],
+            [5772., 5748., 5718., 5697., 5673.],
+            [5816., 5784., 5744., 5716., 5684.]] * units.m
+    smoothed = smooth_circular(hght, 2, 2)
+    truth = [[5640., 5640., 5640., 5640., 5640.],
+             [5684., 5676., 5666., 5659., 5651.],
+             [5728., 5712., 5693.98817, 5678., 5662.],
+             [5772., 5748., 5718., 5697., 5673.],
+             [5816., 5784., 5744., 5716., 5684.]] * units.m
+    assert_array_almost_equal(smoothed, truth, 4)
+
+
+def test_smooth_window_with_bad_window():
+    """Test smooth_window with a bad window size."""
+    temperature = [37, 32, 34, 29, 28, 24, 26, 24, 27, 30] * units.degF
+    with pytest.raises(ValueError) as exc:
+        smooth_window(temperature, np.ones(4))
+    assert 'must be odd in all dimensions' in str(exc)
+
+
 def test_altimeter_to_station_pressure_inhg():
     """Test the altimeter to station pressure function with inches of mercury."""
     altim = 29.8 * units.inHg
     elev = 500 * units.m
     res = altimeter_to_station_pressure(altim, elev)
-    truth = 950.967 * units.hectopascal
+    truth = 950.96498 * units.hectopascal
     assert_almost_equal(res, truth, 3)
 
 
@@ -656,7 +774,7 @@ def test_altimeter_to_station_pressure_hpa():
     altim = 1013 * units.hectopascal
     elev = 500 * units.m
     res = altimeter_to_station_pressure(altim, elev)
-    truth = 954.641 * units.hectopascal
+    truth = 954.639265 * units.hectopascal
     assert_almost_equal(res, truth, 3)
 
 

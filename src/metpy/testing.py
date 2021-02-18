@@ -21,6 +21,19 @@ from metpy.deprecation import MetpyDeprecationWarning
 from .units import units
 
 
+def needs_cartopy(test_func):
+    """Decorate a test function or fixture as requiring CartoPy.
+
+    Will skip the decorated test, or any test using the decorated fixture, if ``cartopy`` is
+    unable to be imported.
+    """
+    @functools.wraps(test_func)
+    def wrapped(*args, **kwargs):
+        pytest.importorskip('cartopy')
+        return test_func(*args, **kwargs)
+    return wrapped
+
+
 def get_upper_air_data(date, station):
     """Get upper air observations from the test data cache.
 
@@ -37,7 +50,7 @@ def get_upper_air_data(date, station):
         dict : upper air data
 
     """
-    sounding_key = '{:%Y-%m-%dT%HZ}_{}'.format(date, station)
+    sounding_key = f'{date:%Y-%m-%dT%HZ}_{station}'
     sounding_files = {'2016-05-22T00Z_DDC': 'may22_sounding.txt',
                       '2013-01-20T12Z_OUN': 'jan20_sounding.txt',
                       '1999-05-04T00Z_OUN': 'may4_sounding.txt',
@@ -106,6 +119,11 @@ def check_and_drop_units(actual, desired):
 
     """
     try:
+        # Convert DataArrays to Quantities
+        if isinstance(desired, xr.DataArray):
+            desired = desired.metpy.unit_array
+        if isinstance(actual, xr.DataArray):
+            actual = actual.metpy.unit_array
         # If the desired result has units, add dimensionless units if necessary, then
         # ensure that this is compatible to the desired result.
         if hasattr(desired, 'units'):
@@ -119,9 +137,7 @@ def check_and_drop_units(actual, desired):
                 actual = actual.to('dimensionless')
     except DimensionalityError:
         raise AssertionError('Units are not compatible: {} should be {}'.format(
-            actual.units, getattr(desired, 'units', 'dimensionless')))
-    except AttributeError:
-        pass
+            actual.units, getattr(desired, 'units', 'dimensionless'))) from None
 
     if hasattr(actual, 'magnitude'):
         actual = actual.magnitude
@@ -194,17 +210,6 @@ def set_agg_backend():
         yield
     finally:
         plt.switch_backend(prev_backend)
-
-
-@pytest.fixture(autouse=True)
-def patch_round(monkeypatch):
-    """Fixture to patch builtin round using numpy's.
-
-    This works around the fact that built-in round changed between Python 2 and 3. This
-    is probably not needed once we're testing on matplotlib 2.0, which has been updated
-    to use numpy's throughout.
-    """
-    monkeypatch.setitem(__builtins__, 'round', np.round)
 
 
 def check_and_silence_warning(warn_type):

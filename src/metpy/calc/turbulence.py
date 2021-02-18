@@ -5,14 +5,15 @@ r"""Contains calculations related to turbulence and time series perturbations.""
 
 import numpy as np
 
+from .tools import make_take
 from ..package_tools import Exporter
-from ..xarray import preprocess_xarray
+from ..xarray import preprocess_and_wrap
 
 exporter = Exporter(globals())
 
 
 @exporter.export
-@preprocess_xarray
+@preprocess_and_wrap(wrap_like='ts')
 def get_perturbation(ts, axis=-1):
     r"""Compute the perturbation from the mean of a time series.
 
@@ -40,14 +41,12 @@ def get_perturbation(ts, axis=-1):
     .. math:: x(t)^{\prime} = x(t) - \overline{x(t)}
 
     """
-    slices = [slice(None)] * ts.ndim
-    slices[axis] = None
-    mean = ts.mean(axis=axis)[tuple(slices)]
+    mean = ts.mean(axis=axis)[make_take(ts.ndim, axis)(None)]
     return ts - mean
 
 
 @exporter.export
-@preprocess_xarray
+@preprocess_and_wrap(wrap_like='u')
 def tke(u, v, w, perturbation=False, axis=-1):
     r"""Compute turbulence kinetic energy.
 
@@ -113,7 +112,7 @@ def tke(u, v, w, perturbation=False, axis=-1):
 
 
 @exporter.export
-@preprocess_xarray
+@preprocess_and_wrap(wrap_like='vel')
 def kinematic_flux(vel, b, perturbation=False, axis=-1):
     r"""Compute the kinematic flux from two time series.
 
@@ -182,7 +181,7 @@ def kinematic_flux(vel, b, perturbation=False, axis=-1):
 
 
 @exporter.export
-@preprocess_xarray
+@preprocess_and_wrap(wrap_like='u')
 def friction_velocity(u, w, v=None, perturbation=False, axis=-1):
     r"""Compute the friction velocity from the time series of velocity components.
 

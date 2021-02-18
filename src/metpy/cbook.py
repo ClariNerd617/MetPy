@@ -4,6 +4,7 @@
 """Collection of generally useful utility code from the cookbook."""
 
 import os
+from pathlib import Path
 
 import numpy as np
 import pooch
@@ -19,13 +20,11 @@ POOCH = pooch.create(
 # Check if we have the data available directly from a git checkout, either from the
 # TEST_DATA_DIR variable, or looking relative to the path of this module's file. Use this
 # to override Pooch's path.
-dev_data_path = os.environ.get('TEST_DATA_DIR',
-                               os.path.join(os.path.dirname(__file__),
-                                            '..', '..', 'staticdata'))
-if os.path.exists(dev_data_path):
+dev_data_path = os.environ.get('TEST_DATA_DIR', Path(__file__).parents[2] / 'staticdata')
+if Path(dev_data_path).exists():
     POOCH.path = dev_data_path
 
-POOCH.load_registry(os.path.join(os.path.dirname(__file__), 'static-data-manifest.txt'))
+POOCH.load_registry(Path(__file__).parent / 'static-data-manifest.txt')
 
 
 def get_test_data(fname, as_file_obj=True, mode='rb'):
@@ -34,7 +33,7 @@ def get_test_data(fname, as_file_obj=True, mode='rb'):
     # If we want a file object, open it, trying to guess whether this should be binary mode
     # or not
     if as_file_obj:
-        return open(path, mode)
+        return open(path, mode)  # noqa: SIM115
 
     return path
 
@@ -91,25 +90,4 @@ def broadcast_indices(x, minv, ndim, axis):
     return tuple(ret)
 
 
-def iterable(value):
-    """Determine if value can be iterated over."""
-    # Special case for pint Quantities
-    if hasattr(value, 'magnitude'):
-        value = value.magnitude
-    return np.iterable(value)
-
-
-def result_type(value):
-    """Determine the type for numpy type casting in a pint-version-safe way."""
-    try:
-        return np.result_type(value)
-    except TypeError:
-        if hasattr(value, 'dtype'):
-            return value.dtype
-        elif hasattr(value, 'magnitude'):
-            return np.result_type(value.magnitude)
-        else:
-            raise TypeError('Cannot determine dtype for type {}'.format(type(value)))
-
-
-__all__ = ('Registry', 'broadcast_indices', 'get_test_data', 'iterable', 'result_type')
+__all__ = ('Registry', 'broadcast_indices', 'get_test_data')

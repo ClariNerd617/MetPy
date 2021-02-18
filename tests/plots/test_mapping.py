@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Test the handling of various mapping tasks."""
 
-import cartopy.crs as ccrs
 import pytest
 
-from metpy.plots.mapping import CFProjection
+ccrs = pytest.importorskip('cartopy.crs')
+
+from metpy.plots.mapping import CFProjection  # noqa: E402
 
 
 def test_cfprojection_arg_mapping():
@@ -65,6 +66,34 @@ def test_globe_spheroid():
     assert 'ellps' not in globe_params
     assert globe_params['a'] == 6367000
     assert globe_params['b'] == 6360000
+
+
+def test_aea():
+    """Test handling albers equal area projection."""
+    attrs = {'grid_mapping_name': 'albers_conical_equal_area', 'earth_radius': 6367000,
+             'standard_parallel': [20, 50]}
+    proj = CFProjection(attrs)
+
+    crs = proj.to_cartopy()
+    assert isinstance(crs, ccrs.AlbersEqualArea)
+    assert crs.proj4_params['lat_1'] == 20
+    assert crs.proj4_params['lat_2'] == 50
+    assert crs.globe.to_proj4_params()['ellps'] == 'sphere'
+
+
+def test_aea_minimal():
+    """Test handling albers equal area projection with minimal attributes."""
+    attrs = {'grid_mapping_name': 'albers_conical_equal_area'}
+    crs = CFProjection(attrs).to_cartopy()
+    assert isinstance(crs, ccrs.AlbersEqualArea)
+
+
+def test_aea_single_std_parallel():
+    """Test albers equal area with one standard parallel."""
+    attrs = {'grid_mapping_name': 'albers_conical_equal_area', 'standard_parallel': 20}
+    crs = CFProjection(attrs).to_cartopy()
+    assert isinstance(crs, ccrs.AlbersEqualArea)
+    assert crs.proj4_params['lat_1'] == 20
 
 
 def test_lcc():

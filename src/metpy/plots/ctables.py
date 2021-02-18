@@ -39,17 +39,12 @@ specific set of constraints (e.g. step size) for mapping.
 """
 
 import ast
-import contextlib
 import glob
 import logging
 import os.path
-import posixpath
-import warnings
 
 import matplotlib.colors as mcolors
-from pkg_resources import resource_listdir, resource_stream
 
-from ..deprecation import metpyDeprecation
 from ..package_tools import Exporter
 
 exporter = Exporter(globals())
@@ -96,8 +91,8 @@ def read_colortable(fobj):
             if literal:
                 ret.append(mcolors.colorConverter.to_rgb(literal))
         return ret
-    except (SyntaxError, ValueError):
-        raise RuntimeError('Malformed colortable.')
+    except (SyntaxError, ValueError) as e:
+        raise RuntimeError(f'Malformed colortable (bad line: {line})') from e
 
 
 def convert_gempak_table(infile, outfile):
@@ -117,7 +112,7 @@ def convert_gempak_table(infile, outfile):
     for line in infile:
         if not line.startswith('!') and line.strip():
             r, g, b = map(int, line.split())
-            outfile.write('({0:f}, {1:f}, {2:f})\n'.format(r / 255, g / 255, b / 255))
+            outfile.write('({:f}, {:f}, {:f})\n'.format(r / 255, g / 255, b / 255))
 
 
 class ColortableRegistry(dict):
@@ -126,13 +121,6 @@ class ColortableRegistry(dict):
     Provides access to color tables, read collections of files, and generates
     matplotlib's Normalize instances to go with the colortable.
     """
-
-    def __getitem__(self, key):
-        """Handle viridis deprecation."""
-        if key == 'viridis':
-            warnings.warn('Viridis has been deprecated in v0.11. Please use '
-                          "matplotlib's 'viridis'.", metpyDeprecation)
-        return super().__getitem__(key)
 
     def scan_resource(self, pkg, path):
         r"""Scan a resource directory for colortable files and add them to the registry.
@@ -145,12 +133,15 @@ class ColortableRegistry(dict):
             The path to the directory with the color tables
 
         """
-        for fname in resource_listdir(pkg, path):
-            if fname.endswith(TABLE_EXT):
-                table_path = posixpath.join(path, fname)
-                with contextlib.closing(resource_stream(pkg, table_path)) as stream:
-                    self.add_colortable(stream,
-                                        posixpath.splitext(posixpath.basename(fname))[0])
+        try:
+            from importlib.resources import files as importlib_resources_files
+        except ImportError:  # Can remove when we require Python > 3.8
+            from importlib_resources import files as importlib_resources_files
+
+        for entry in (importlib_resources_files(pkg) / path).iterdir():
+            if entry.suffix == TABLE_EXT:
+                with entry.open() as stream:
+                    self.add_colortable(stream, entry.with_suffix('').name)
 
     def scan_dir(self, path):
         r"""Scan a directory on disk for color table files and add them to the registry.
@@ -163,7 +154,7 @@ class ColortableRegistry(dict):
         """
         for fname in glob.glob(os.path.join(path, '*' + TABLE_EXT)):
             if os.path.isfile(fname):
-                with open(fname, 'r') as fobj:
+                with open(fname) as fobj:
                     try:
                         self.add_colortable(fobj, os.path.splitext(os.path.basename(fname))[0])
                         log.debug('Added colortable from file: %s', fname)
@@ -182,10 +173,8 @@ class ColortableRegistry(dict):
             The name under which the color table will be stored
 
         """
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', category=metpyDeprecation)
-            self[name] = read_colortable(fobj)
-            self[name + '_r'] = self[name][::-1]
+        self[name] = read_colortable(fobj)
+        self[name + '_r'] = self[name][::-1]
 
     def get_with_steps(self, name, start, step):
         r"""Get a color table from the registry with a corresponding norm.

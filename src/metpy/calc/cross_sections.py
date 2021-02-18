@@ -13,6 +13,7 @@ import xarray as xr
 from .basic import coriolis_parameter
 from .tools import first_derivative
 from ..package_tools import Exporter
+from ..units import units
 from ..xarray import check_axis, check_matching_coordinates
 
 exporter = Exporter(globals())
@@ -35,9 +36,7 @@ def distances_from_cross_section(cross):
     """
     if check_axis(cross.metpy.x, 'longitude') and check_axis(cross.metpy.y, 'latitude'):
         # Use pyproj to obtain x and y distances
-        from pyproj import Geod
-
-        g = Geod(cross.metpy.cartopy_crs.proj4_init)
+        g = cross.metpy.pyproj_crs.get_geod()
         lon = cross.metpy.x
         lat = cross.metpy.y
 
@@ -49,8 +48,8 @@ def distances_from_cross_section(cross):
         y = distance * np.cos(np.deg2rad(forward_az))
 
         # Build into DataArrays
-        x = xr.DataArray(x, coords=lon.coords, dims=lon.dims, attrs={'units': 'meters'})
-        y = xr.DataArray(y, coords=lat.coords, dims=lat.dims, attrs={'units': 'meters'})
+        x = xr.DataArray(x * units.meter, coords=lon.coords, dims=lon.dims)
+        y = xr.DataArray(y * units.meter, coords=lat.coords, dims=lat.dims)
 
     elif check_axis(cross.metpy.x, 'x') and check_axis(cross.metpy.y, 'y'):
 
@@ -70,7 +69,7 @@ def latitude_from_cross_section(cross):
     Parameters
     ----------
     cross : `xarray.DataArray`
-        The input DataArray of a cross-section from which to obtain latitudes.
+        The input DataArray of a cross-section from which to obtain latitudes
 
     Returns
     -------
@@ -82,12 +81,14 @@ def latitude_from_cross_section(cross):
     if check_axis(y, 'latitude'):
         return y
     else:
-        import cartopy.crs as ccrs
-        latitude = ccrs.Geodetic().transform_points(cross.metpy.cartopy_crs,
-                                                    cross.metpy.x.values,
-                                                    y.values)[..., 1]
-        latitude = xr.DataArray(latitude, coords=y.coords, dims=y.dims,
-                                attrs={'units': 'degrees_north'})
+        from pyproj import Proj
+        latitude = Proj(cross.metpy.pyproj_crs)(
+            cross.metpy.x.values,
+            y.values,
+            inverse=True,
+            radians=False
+        )[1]
+        latitude = xr.DataArray(latitude * units.degrees_north, coords=y.coords, dims=y.dims)
         return latitude
 
 
@@ -96,7 +97,7 @@ def unit_vectors_from_cross_section(cross, index='index'):
     r"""Calculate the unit tanget and unit normal vectors from a cross-section.
 
     Given a path described parametrically by :math:`\vec{l}(i) = (x(i), y(i))`, we can find
-    the unit tangent vector by the formula
+    the unit tangent vector by the formula:
 
     .. math:: \vec{T}(i) =
         \frac{1}{\sqrt{\left( \frac{dx}{di} \right)^2 + \left( \frac{dy}{di} \right)^2}}
@@ -108,16 +109,17 @@ def unit_vectors_from_cross_section(cross, index='index'):
     Parameters
     ----------
     cross : `xarray.DataArray`
-        The input DataArray of a cross-section from which to obtain latitudes.
+        The input DataArray of a cross-section from which to obtain latitudes
+
     index : `str`, optional
         A string denoting the index coordinate of the cross section, defaults to 'index' as
-        set by `metpy.interpolate.cross_section`.
+        set by `metpy.interpolate.cross_section`
 
     Returns
     -------
     unit_tangent_vector, unit_normal_vector : tuple of `numpy.ndarray`
         Arrays describing the unit tangent and unit normal vectors (in x,y) for all points
-        along the cross section.
+        along the cross section
 
     """
     x, y = distances_from_cross_section(cross)
@@ -139,6 +141,7 @@ def cross_section_components(data_x, data_y, index='index'):
     data_x : `xarray.DataArray`
         The input DataArray of the x-component (in terms of data projection) of the vector
         field.
+
     data_y : `xarray.DataArray`
         The input DataArray of the y-component (in terms of data projection) of the vector
         field.
@@ -146,8 +149,7 @@ def cross_section_components(data_x, data_y, index='index'):
     Returns
     -------
     component_tangential, component_normal: tuple of `xarray.DataArray`
-        The components of the vector field in the tangential and normal directions,
-        respectively.
+        Components of the vector field in the tangential and normal directions, respectively
 
     See Also
     --------
@@ -164,10 +166,6 @@ def cross_section_components(data_x, data_y, index='index'):
     # Take the dot products
     component_tang = data_x * unit_tang[0] + data_y * unit_tang[1]
     component_norm = data_x * unit_norm[0] + data_y * unit_norm[1]
-
-    # Reattach units (only reliable attribute after operation)
-    component_tang.attrs = {'units': data_x.attrs['units']}
-    component_norm.attrs = {'units': data_x.attrs['units']}
 
     return component_tang, component_norm
 
@@ -189,7 +187,7 @@ def normal_component(data_x, data_y, index='index'):
     Returns
     -------
     component_normal: `xarray.DataArray`
-        The component of the vector field in the normal directions.
+        Component of the vector field in the normal directions
 
     See Also
     --------
@@ -207,9 +205,8 @@ def normal_component(data_x, data_y, index='index'):
     component_norm = data_x * unit_norm[0] + data_y * unit_norm[1]
 
     # Reattach only reliable attributes after operation
-    for attr in ('units', 'grid_mapping'):
-        if attr in data_x.attrs:
-            component_norm.attrs[attr] = data_x.attrs[attr]
+    if 'grid_mapping' in data_x.attrs:
+        component_norm.attrs['grid_mapping'] = data_x.attrs['grid_mapping']
 
     return component_norm
 
@@ -223,15 +220,16 @@ def tangential_component(data_x, data_y, index='index'):
     ----------
     data_x : `xarray.DataArray`
         The input DataArray of the x-component (in terms of data projection) of the vector
-        field.
+        field
+
     data_y : `xarray.DataArray`
         The input DataArray of the y-component (in terms of data projection) of the vector
-        field.
+        field
 
     Returns
     -------
     component_tangential: `xarray.DataArray`
-        The component of the vector field in the tangential directions.
+        Component of the vector field in the tangential directions
 
     See Also
     --------
@@ -249,20 +247,19 @@ def tangential_component(data_x, data_y, index='index'):
     component_tang = data_x * unit_tang[0] + data_y * unit_tang[1]
 
     # Reattach only reliable attributes after operation
-    for attr in ('units', 'grid_mapping'):
-        if attr in data_x.attrs:
-            component_tang.attrs[attr] = data_x.attrs[attr]
+    if 'grid_mapping' in data_x.attrs:
+        component_tang.attrs['grid_mapping'] = data_x.attrs['grid_mapping']
 
     return component_tang
 
 
 @exporter.export
 @check_matching_coordinates
-def absolute_momentum(u_wind, v_wind, index='index'):
+def absolute_momentum(u, v, index='index'):
     r"""Calculate cross-sectional absolute momentum (also called pseudoangular momentum).
 
     As given in [Schultz1999]_, absolute momentum (also called pseudoangular momentum) is
-    given by
+    given by:
 
     .. math:: M = v + fx
 
@@ -276,36 +273,35 @@ def absolute_momentum(u_wind, v_wind, index='index'):
 
     Parameters
     ----------
-    u_wind : `xarray.DataArray`
+    u : `xarray.DataArray`
         The input DataArray of the x-component (in terms of data projection) of the wind.
-    v_wind : `xarray.DataArray`
+    v : `xarray.DataArray`
         The input DataArray of the y-component (in terms of data projection) of the wind.
 
     Returns
     -------
     absolute_momentum: `xarray.DataArray`
-        The absolute momentum
+        Absolute momentum
 
     Notes
     -----
-    The coordinates of `u_wind` and `v_wind` must match.
+    The coordinates of `u` and `v` must match.
+
+    .. versionchanged:: 1.0
+       Renamed ``u_wind``, ``v_wind`` parameters to ``u``, ``v``
 
     """
     # Get the normal component of the wind
-    norm_wind = normal_component(u_wind, v_wind, index=index)
-    norm_wind.metpy.convert_units('m/s')
+    norm_wind = normal_component(u, v, index=index).metpy.convert_units('m/s')
 
     # Get other pieces of calculation (all as ndarrays matching shape of norm_wind)
-    latitude = latitude_from_cross_section(norm_wind)  # in degrees_north
+    latitude = latitude_from_cross_section(norm_wind)
     _, latitude = xr.broadcast(norm_wind, latitude)
-    f = coriolis_parameter(np.deg2rad(latitude.values)).magnitude  # in 1/s
+    f = coriolis_parameter(np.deg2rad(latitude.values))
     x, y = distances_from_cross_section(norm_wind)
-    x.metpy.convert_units('meters')
-    y.metpy.convert_units('meters')
+    x = x.metpy.convert_units('meters')
+    y = y.metpy.convert_units('meters')
     _, x, y = xr.broadcast(norm_wind, x, y)
-    distance = np.hypot(x, y).values  # in meters
+    distance = np.hypot(x.metpy.quantify(), y.metpy.quantify())
 
-    m = norm_wind + f * distance
-    m.attrs = {'units': norm_wind.attrs['units']}
-
-    return m
+    return norm_wind + f * distance

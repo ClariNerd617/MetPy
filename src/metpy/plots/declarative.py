@@ -3,25 +3,24 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 """Declarative plotting tools."""
 
+import contextlib
 from datetime import datetime, timedelta
 
-try:
-    import cartopy.crs as ccrs
-    DEFAULT_LAT_LON = ccrs.PlateCarree()
-except ImportError:
-    DEFAULT_LAT_LON = None
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from traitlets import (Any, Bool, Float, HasTraits, Instance, Int, List, observe, Tuple,
                        Unicode, Union)
 
 from . import ctables
 from . import wx_symbols
+from .cartopy_utils import import_cartopy
 from .station_plot import StationPlot
 from ..calc import reduce_point_density
 from ..package_tools import Exporter
 from ..units import units
 
+ccrs = import_cartopy()
 exporter = Exporter(globals())
 
 _areas = {
@@ -500,9 +499,10 @@ class Panel(HasTraits):
 
 @exporter.export
 class PanelContainer(HasTraits):
-    """Collects panels and set complete figure related settings (e.g., figsize)."""
+    """Collects panels and set complete figure related settings (e.g., size)."""
 
-    size = Union([Tuple(Int(), Int()), Instance(type(None))], default_value=None)
+    size = Union([Tuple(Union([Int(), Float()]), Union([Int(), Float()])),
+                 Instance(type(None))], default_value=None)
     size.__doc__ = """This trait takes a tuple of (width, height) to set the size of the
     figure.
 
@@ -545,10 +545,8 @@ class PanelContainer(HasTraits):
         self.figure.canvas.draw()
 
         # Flush out interactive events--only ok on Agg for newer matplotlib
-        try:
+        with contextlib.suppress(NotImplementedError):
             self.figure.canvas.flush_events()
-        except NotImplementedError:
-            pass
 
     def draw(self):
         """Draw the collection of panels."""
@@ -616,7 +614,7 @@ class MapPanel(Panel):
     This trait can also be set with a string value associated with the named geographic regions
     within MetPy. The tuples associated with the names are based on a PlatteCarree projection.
     For a CONUS region, the following strings can be used: 'us', 'spcus', 'ncus', and 'afus'.
-    For regional plots, US state postal codes can be used.
+    For regional plots, US postal state abbreviations can be used.
     """
 
     projection = Union([Unicode(), Instance('cartopy.crs.Projection')], default_value='data')
@@ -630,12 +628,12 @@ class MapPanel(Panel):
 
     layers = List(Union([Unicode(), Instance('cartopy.feature.Feature')]),
                   default_value=['coastline'])
-    layers.__doc__ = """A string for a pre-defined feature layer or a Cartopy Feature object.
+    layers.__doc__ = """A list of strings for a pre-defined feature layer or a Cartopy Feature object.
 
     Like the projection, there are a couple of pre-defined feature layers that can be called
     using a short name. The pre-defined layers are: 'coastline', 'states', 'borders', 'lakes',
-    'land', 'ocean', and 'rivers'. Additionally, this trait can be set using a Cartopy Feature
-    object.
+    'land', 'ocean', 'rivers', 'usstates', and 'uscounties'. Additionally, this can accept
+    Cartopy Feature objects.
     """
 
     title = Unicode()
@@ -730,6 +728,18 @@ class MapPanel(Panel):
         # Only need to run if we've actually changed.
         if self._need_redraw:
 
+            # Set the extent as appropriate based on the area. One special case for 'global'
+            if self.area == 'global':
+                self.ax.set_global()
+            elif self.area is not None:
+                # Try to look up if we have a string
+                if isinstance(self.area, str):
+                    area = _areas[self.area.lower()]
+                # Otherwise, assume we have a tuple to use as the extent
+                else:
+                    area = self.area
+                self.ax.set_extent(area, ccrs.PlateCarree())
+
             # Draw all of the plots.
             for p in self.plots:
                 with p.hold_trait_notifications():
@@ -738,18 +748,6 @@ class MapPanel(Panel):
             # Add all of the maps
             for feat in self._layer_features:
                 self.ax.add_feature(feat)
-
-            # Set the extent as appropriate based on the area. One special case for 'global'
-            if self.area == 'global':
-                self.ax.set_global()
-            elif self.area is not None:
-                # Try to look up if we have a string
-                if isinstance(self.area, str):
-                    area = _areas[self.area]
-                # Otherwise, assume we have a tuple to use as the extent
-                else:
-                    area = self.area
-                self.ax.set_extent(area, DEFAULT_LAT_LON)
 
             # Use the set title or generate one.
             title = self.title or ',\n'.join(plot.name for plot in self.plots)
@@ -781,6 +779,21 @@ class Plots2D(HasTraits):
     If a forecast hour is to be plotted the time should be set to the valid future time, which
     can be done using the `~datetime.datetime` and `~datetime.timedelta` objects
     from the Python standard library.
+    """
+
+    plot_units = Unicode(allow_none=True, default_value=None)
+    plot_units.__doc__ = """The desired units to plot the field in.
+
+    Setting this attribute will convert the units of the field variable to the given units for
+    plotting using the MetPy Units module.
+    """
+
+    scale = Float(default_value=1e0)
+    scale.__doc__ = """Scale the field to be plotted by the value given.
+
+    This attribute will scale the field by multiplying by the scale. For example, to
+    scale vorticity to be whole values for contouring you could set the scale to 1e5, such that
+    the data values will be scaled by 10^5.
     """
 
     @property
@@ -864,7 +877,7 @@ class Plots2D(HasTraits):
         else:
             ret = self.field
         if self.level is not None:
-            ret += '@{:d}'.format(self.level)
+            ret += f'@{self.level:d}'
         return ret
 
 
@@ -918,7 +931,11 @@ class PlotScalar(Plots2D):
 
             if self.time is not None:
                 subset[data.metpy.time.name] = self.time
-            self._griddata = data.metpy.sel(**subset).squeeze()
+            data_subset = data.metpy.sel(**subset).squeeze()
+
+            if self.plot_units is not None:
+                data_subset = data_subset.metpy.convert_units(self.plot_units)
+            self._griddata = data_subset * self.scale
 
         return self._griddata
 
@@ -933,9 +950,9 @@ class PlotScalar(Plots2D):
         y = self.griddata.metpy.y
 
         if 'degree' in x.units:
-            x, y, _ = self.griddata.metpy.cartopy_crs.transform_points(DEFAULT_LAT_LON,
+            x, y, _ = self.griddata.metpy.cartopy_crs.transform_points(ccrs.PlateCarree(),
                                                                        *np.meshgrid(x, y)).T
-            x = x[:, 0] % 360
+            x = x[:, 0]
             y = y[0, :]
 
         return x, y, self.griddata
@@ -989,10 +1006,11 @@ class ColorfillTraits(HasTraits):
     """
 
     colorbar = Unicode(default_value=None, allow_none=True)
-    colorbar.__doc__ = """A boolean (True/False) on whether to add a colorbar to the plot.
+    colorbar.__doc__ = """A string (horizontal/vertical) on whether to add a colorbar to the plot.
 
-    To add a colorbar associated with the plot data set the trait to ``True``, the default
-    values is ``False``.
+    To add a colorbar associated with the plot, set the trait to ``horizontal`` or
+    ``vertical``,specifying the orientation of the produced colorbar. The default value is
+    ``None``.
     """
 
 
@@ -1088,7 +1106,7 @@ class ContourPlot(PlotScalar, ContourTraits):
                                              linestyles=self.linestyle,
                                              transform=imdata.metpy.cartopy_crs)
         if self.clabels:
-            self.handle.clabel(inline=1, fmt='%.0f', inline_spacing=2,
+            self.handle.clabel(inline=1, fmt='%.0f', inline_spacing=8,
                                use_clabeltext=True)
 
 
@@ -1190,8 +1208,14 @@ class PlotVector(Plots2D):
 
             if self.time is not None:
                 subset[u.metpy.time.name] = self.time
-            self._griddata_u = u.metpy.sel(**subset).squeeze()
-            self._griddata_v = v.metpy.sel(**subset).squeeze()
+            data_subset_u = u.metpy.sel(**subset).squeeze()
+            data_subset_v = v.metpy.sel(**subset).squeeze()
+
+            if self.plot_units is not None:
+                data_subset_u = data_subset_u.metpy.convert_units(self.plot_units)
+                data_subset_v = data_subset_v.metpy.convert_units(self.plot_units)
+            self._griddata_u = data_subset_u
+            self._griddata_v = data_subset_v
 
         return (self._griddata_u, self._griddata_v)
 
@@ -1206,15 +1230,15 @@ class PlotVector(Plots2D):
         y = self.griddata[0].metpy.y
 
         if self.earth_relative:
-            x, y, _ = DEFAULT_LAT_LON.transform_points(self.griddata[0].metpy.cartopy_crs,
-                                                       *np.meshgrid(x, y)).T
+            x, y, _ = ccrs.PlateCarree().transform_points(self.griddata[0].metpy.cartopy_crs,
+                                                          *np.meshgrid(x, y)).T
             x = x.T
             y = y.T
         else:
             if 'degree' in x.units:
                 x, y, _ = self.griddata[0].metpy.cartopy_crs.transform_points(
-                    DEFAULT_LAT_LON, *np.meshgrid(x, y)).T
-                x = x.T % 360
+                    ccrs.PlateCarree(), *np.meshgrid(x, y)).T
+                x = x.T
                 y = y.T
 
         if x.ndim == 1:
@@ -1254,7 +1278,7 @@ class BarbPlot(PlotVector):
         """Build the plot by calling needed plotting methods as necessary."""
         x, y, u, v = self.plotdata
         if self.earth_relative:
-            transform = DEFAULT_LAT_LON
+            transform = ccrs.PlateCarree()
         else:
             transform = u.metpy.cartopy_crs
 
@@ -1279,18 +1303,21 @@ class PlotObs(HasTraits):
       * time
       * fields
       * locations (optional)
-      * time_range (optional)
+      * time_window (optional)
       * formats (optional)
       * colors (optional)
+      * plot_units (optional)
       * vector_field (optional)
       * vector_field_color (optional)
+      * vector_field_length (optional)
+      * vector_plot_units (optional)
       * reduce_points (optional)
     """
 
     parent = Instance(Panel)
     _need_redraw = Bool(default_value=True)
 
-    level = Union([Int(allow_none=True), Instance(units.Quantity)])
+    level = Union([Int(allow_none=True), Instance(units.Quantity)], default_value=None)
     level.__doc__ = """The level of the field to be plotted.
 
     This is a value with units to choose the desired plot level. For example, selecting the
@@ -1329,7 +1356,7 @@ class PlotObs(HasTraits):
     """
 
     formats = List(default_value=[None])
-    formats.__doc__ = """List of the scalar and symbol field data formats. (optional)
+    formats.__doc__ = """List of the scalar, symbol, and text field data formats. (optional)
 
     List of scalar parameters formmaters or mapping values (if symbol) for plotting text and/or
     symbols around the station plot (e.g., for pressure variable
@@ -1337,6 +1364,8 @@ class PlotObs(HasTraits):
 
     For symbol mapping the following options are available to be put in as a string:
     current_weather, sky_cover, low_clouds, mid_clouds, high_clouds, and pressure_tendency.
+
+    For plotting text, use the format setting of 'text'.
     """
 
     colors = List(Unicode(), default_value=['black'])
@@ -1356,8 +1385,27 @@ class PlotObs(HasTraits):
     vector_field_color = Unicode('black', allow_none=True)
     vector_field_color.__doc__ = """String color name to plot the vector. (optional)"""
 
+    vector_field_length = Int(default_value=None, allow_none=True)
+    vector_field_length.__doc__ = """Integer value to set the length of the plotted vector.
+    (optional)
+    """
+
     reduce_points = Float(default_value=0)
     reduce_points.__doc__ = """Float to reduce number of points plotted. (optional)"""
+
+    plot_units = List(default_value=[None], allow_none=True)
+    plot_units.__doc__ = """A list of the desired units to plot the fields in.
+
+    Setting this attribute will convert the units of the field variable to the given units for
+    plotting using the MetPy Units module, provided that units are attached to the DataFrame.
+    """
+
+    vector_plot_units = Unicode(default_value=None, allow_none=True)
+    vector_plot_units.__doc__ = """The desired units to plot the vector field in.
+
+    Setting this attribute will convert the units of the field variable to the given units for
+    plotting using the MetPy Units module, provided that units are attached to the DataFrame.
+    """
 
     def clear(self):
         """Clear the plot.
@@ -1403,38 +1451,63 @@ class PlotObs(HasTraits):
         ret = ''
         ret += ' and '.join(f for f in self.fields)
         if self.level is not None:
-            ret += '@{:d}'.format(self.level)
+            ret += f'@{self.level:d}'
         return ret
 
     @property
     def obsdata(self):
         """Return the internal cached data."""
-        time_vars = ['valid', 'time', 'valid_time', 'date_time', 'date']
-        stn_vars = ['station', 'stn', 'station_id', 'stid']
         if getattr(self, '_obsdata', None) is None:
-            dim_times = [time_var for time_var in time_vars if time_var in list(self.data)]
+            # Use a copy of data so we retain all of the original data passed in unmodified
+            data = self.data
+
+            # Subset for a particular level if given
+            if self.level is not None:
+                mag = getattr(self.level, 'magnitude', self.level)
+                data = data[data.pressure == mag]
+
+            # Subset for our particular time
+            if self.time is not None:
+                # If data are not currently indexed by time, we need to do so choosing one of
+                # the columns we're looking for
+                if not isinstance(data.index, pd.DatetimeIndex):
+                    time_vars = ['valid', 'time', 'valid_time', 'date_time', 'date']
+                    dim_times = [time_var for time_var in time_vars if
+                                 time_var in list(self.data)]
+                    if not dim_times:
+                        raise AttributeError(
+                            'Time variable not found. Valid variable names are:'
+                            f'{time_vars}')
+
+                    data = data.set_index(dim_times[0])
+                    if not isinstance(data.index, pd.DatetimeIndex):
+                        # Convert our column of interest to a datetime
+                        data = data.reset_index()
+                        time_index = pd.to_datetime(data[dim_times[0]])
+                        data = data.set_index(time_index)
+
+                # Works around the fact that traitlets 4.3 insists on sending us None by
+                # default because timedelta(0) is Falsey.
+                window = timedelta(minutes=0) if self.time_window is None else self.time_window
+
+                # Indexes need to be properly sorted for the slicing below to work; the
+                # error you get if that's not the case really convoluted, which is why
+                # we don't rely on users doing it.
+                data = data.sort_index()
+                data = data[self.time - window:self.time + window]
+
+            # Look for the station column
+            stn_vars = ['station', 'stn', 'station_id', 'stid']
             dim_stns = [stn_var for stn_var in stn_vars if stn_var in list(self.data)]
-            if not dim_times:
-                raise AttributeError('Time variable not found. Valid variable names are:'
-                                     f'{time_vars}')
-            else:
-                dim_time = dim_times[0]
             if not dim_stns:
                 raise AttributeError('Station variable not found. Valid variable names are: '
                                      f'{stn_vars}')
             else:
                 dim_stn = dim_stns[0]
-            if self.level is not None:
-                level_subset = self.data.pressure == self.level.m
-                self._obsdata = self.data[level_subset]
-            else:
-                if self.time_window is not None:
-                    time_slice = ((self.data[dim_time] >= (self.time - self.time_window))
-                                  & (self.data[dim_time] <= (self.time + self.time_window)))
-                    data = self.data[time_slice].groupby(dim_stn).tail(1)
-                else:
-                    data = self.data.groupby(dim_stn).tail(1)
-                self._obsdata = data
+
+            # Make sure we only use one observation per station
+            self._obsdata = data.groupby(dim_stn).tail(1)
+
         return self._obsdata
 
     @property
@@ -1485,24 +1558,54 @@ class PlotObs(HasTraits):
                                   transform=ccrs.PlateCarree(), fontsize=10)
 
         for i, ob_type in enumerate(self.fields):
+            field_kwargs = {}
             if len(self.locations) > 1:
                 location = self.locations[i]
             else:
                 location = self.locations[0]
             if len(self.colors) > 1:
-                color = self.colors[i]
+                field_kwargs['color'] = self.colors[i]
             else:
-                color = self.colors[0]
-            if self.formats[i] is not None:
-                mapper = getattr(wx_symbols, str(self.formats[i]), None)
+                field_kwargs['color'] = self.colors[0]
+            if len(self.formats) > 1:
+                field_kwargs['formatter'] = self.formats[i]
+            else:
+                field_kwargs['formatter'] = self.formats[0]
+            if len(self.plot_units) > 1:
+                field_kwargs['plot_units'] = self.plot_units[i]
+            else:
+                field_kwargs['plot_units'] = self.plot_units[0]
+            if hasattr(self.data, 'units') and (field_kwargs['plot_units'] is not None):
+                parameter = data[ob_type][subset].values * units(self.data.units[ob_type])
+            else:
+                parameter = data[ob_type][subset]
+            if field_kwargs['formatter'] is not None:
+                mapper = getattr(wx_symbols, str(field_kwargs['formatter']), None)
                 if mapper is not None:
-                    self.handle.plot_symbol(location, data[ob_type][subset],
-                                            mapper, color=color)
+                    field_kwargs.pop('formatter')
+                    self.handle.plot_symbol(location, parameter, mapper, **field_kwargs)
                 else:
-                    self.handle.plot_parameter(location, data[ob_type][subset],
-                                               color=color, formatter=self.formats[i])
+                    if self.formats[i] == 'text':
+                        self.handle.plot_text(location, parameter, color=field_kwargs['color'])
+                    else:
+                        self.handle.plot_parameter(location, parameter, **field_kwargs)
             else:
-                self.handle.plot_parameter(location, data[ob_type][subset], color=color)
+                field_kwargs.pop('formatter')
+                self.handle.plot_parameter(location, parameter, **field_kwargs)
+
         if self.vector_field[0] is not None:
-            self.handle.plot_barb(data[self.vector_field[0]][subset],
-                                  data[self.vector_field[1]][subset])
+            vector_kwargs = {}
+            vector_kwargs['color'] = self.vector_field_color
+            vector_kwargs['plot_units'] = self.vector_plot_units
+            if hasattr(self.data, 'units') and (vector_kwargs['plot_units'] is not None):
+                u = (data[self.vector_field[0]][subset].values
+                     * units(self.data.units[self.vector_field[0]]))
+                v = (data[self.vector_field[1]][subset].values
+                     * units(self.data.units[self.vector_field[1]]))
+            else:
+                vector_kwargs.pop('plot_units')
+                u = data[self.vector_field[0]][subset]
+                v = data[self.vector_field[1]][subset]
+            if self.vector_field_length is not None:
+                vector_kwargs['length'] = self.vector_field_length
+            self.handle.plot_barb(u, v, **vector_kwargs)

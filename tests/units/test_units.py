@@ -3,18 +3,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 r"""Tests the operation of MetPy's unit support code."""
 
-import sys
-
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import pint
 import pytest
 
 from metpy.testing import assert_array_almost_equal, assert_array_equal
 from metpy.testing import assert_nan, set_agg_backend  # noqa: F401
-from metpy.units import (atleast_1d, atleast_2d, check_units, concatenate, diff,
-                         pandas_dataframe_to_unit_arrays, units)
+from metpy.units import check_units, concatenate, pandas_dataframe_to_unit_arrays, units
 
 
 def test_concatenate():
@@ -36,8 +32,6 @@ def test_concatenate_masked():
     assert_array_equal(result.mask, np.array([False, True, False, False]))
 
 
-@pytest.mark.skipif(pint.__version__ == '0.9', reason=('Currently broken upstream (see '
-                                                       'pint#751'))
 @pytest.mark.mpl_image_compare(tolerance=0, remove_text=True)
 def test_axhline():
     r"""Ensure that passing a quantity to axhline does not error."""
@@ -48,8 +42,6 @@ def test_axhline():
     return fig
 
 
-@pytest.mark.skipif(pint.__version__ == '0.9', reason=('Currently broken upstream (see '
-                                                       'pint#751'))
 @pytest.mark.mpl_image_compare(tolerance=0, remove_text=True)
 def test_axvline():
     r"""Ensure that passing a quantity to axvline does not error."""
@@ -58,29 +50,6 @@ def test_axvline():
     ax.set_xlim(-1, 1)
     ax.set_xlabel('')
     return fig
-
-
-def test_atleast1d_without_units():
-    """Test that atleast_1d wrapper can handle plain arrays."""
-    assert_array_equal(atleast_1d(1), np.array([1]))
-    assert_array_equal(atleast_1d([1, ], [2, ]), np.array([[1, ], [2, ]]))
-
-
-def test_atleast2d_without_units():
-    """Test that atleast_2d wrapper can handle plain arrays."""
-    assert_array_equal(atleast_2d(1), np.array([[1]]))
-
-
-def test_atleast2d_with_units():
-    """Test that atleast_2d wrapper can handle plain array with units."""
-    assert_array_equal(
-        atleast_2d(1 * units.degC), np.array([[1]]) * units.degC)
-
-
-def test_units_diff():
-    """Test our diff handles units properly."""
-    assert_array_equal(diff(np.arange(20, 22) * units.degC),
-                       np.array([1]) * units.delta_degC)
 
 
 #
@@ -120,7 +89,6 @@ test_params = [((30 * units.degC, 1000 * units.mb, 1 * units('kg/m^3'), 1, 5 * u
                  ('mixing', '[dimensionless]', 'meter')])]
 
 
-@pytest.mark.skipif(sys.version_info < (3, 3), reason='Unit checking requires Python >= 3.3')
 @pytest.mark.parametrize('func', test_funcs, ids=['some kwargs', 'all kwargs', 'all pos'])
 @pytest.mark.parametrize('args,kwargs,bad_parts', test_params,
                          ids=['one bad arg', 'all args no units', 'mixed args'])
@@ -217,3 +185,13 @@ def test_assert_nan_checks_units():
     """Test that assert_nan properly checks units."""
     with pytest.raises(AssertionError):
         assert_nan(np.nan * units.m, units.second)
+
+
+def test_percent_units():
+    """Test that percent sign units are properly parsed and interpreted."""
+    assert str(units('%').units) == 'percent'
+
+
+def test_udunits_power_syntax():
+    """Test that UDUNITS style powers are properly parsed and interpreted."""
+    assert units('m2 s-2').units == units.m ** 2 / units.s ** 2

@@ -6,14 +6,16 @@
 Currently this includes tools for working with CartoPy projections.
 
 """
-import cartopy.crs as ccrs
-
 from ..cbook import Registry
+from ..plots.cartopy_utils import import_cartopy
+
+ccrs = import_cartopy()
 
 
-class CFProjection(object):
+class CFProjection:
     """Handle parsing CF projection metadata."""
 
+    # mapping from Cartopy to CF vocabulary
     _default_attr_mapping = [('false_easting', 'false_easting'),
                              ('false_northing', 'false_northing'),
                              ('central_latitude', 'latitude_of_projection_origin'),
@@ -59,6 +61,11 @@ class CFProjection(object):
 
         return ccrs.Globe(**kwargs)
 
+    @property
+    def cartopy_geodetic(self):
+        """Make a `cartopy.crs.Geodetic` instance from the appropriate `cartopy.crs.Globe`."""
+        return ccrs.Geodetic(self.cartopy_globe)
+
     def to_cartopy(self):
         """Convert to a CartoPy projection."""
         globe = self.cartopy_globe
@@ -66,9 +73,15 @@ class CFProjection(object):
         try:
             proj_handler = self.projection_registry[proj_name]
         except KeyError:
-            raise ValueError('Unhandled projection: {}'.format(proj_name))
+            raise ValueError(f'Unhandled projection: {proj_name}') from None
 
         return proj_handler(self._attrs, globe)
+
+    def to_pyproj(self):
+        """Convert to a PyProj CRS."""
+        import pyproj
+
+        return pyproj.CRS.from_cf(self._attrs)
 
     def to_dict(self):
         """Get the dictionary of metadata attributes."""
@@ -122,6 +135,20 @@ def make_lcc(attrs_dict, globe):
         except TypeError:
             kwargs['standard_parallels'] = [kwargs['standard_parallels']]
     return ccrs.LambertConformal(globe=globe, **kwargs)
+
+
+@CFProjection.register('albers_conical_equal_area')
+def make_aea(attrs_dict, globe):
+    """Handle Albers Equal Area."""
+    attr_mapping = [('central_longitude', 'longitude_of_central_meridian'),
+                    ('standard_parallels', 'standard_parallel')]
+    kwargs = CFProjection.build_projection_kwargs(attrs_dict, attr_mapping)
+    if 'standard_parallels' in kwargs:
+        try:
+            len(kwargs['standard_parallels'])
+        except TypeError:
+            kwargs['standard_parallels'] = [kwargs['standard_parallels']]
+    return ccrs.AlbersEqualArea(globe=globe, **kwargs)
 
 
 @CFProjection.register('latitude_longitude')

@@ -10,13 +10,12 @@ import numpy as np
 from .wx_symbols import (current_weather, high_clouds, low_clouds, mid_clouds,
                          pressure_tendency, sky_cover, wx_symbol_font)
 from ..package_tools import Exporter
-from ..units import atleast_1d
 
 exporter = Exporter(globals())
 
 
 @exporter.export
-class StationPlot(object):
+class StationPlot:
     """Make a standard meteorological station plot.
 
     Plots values, symbols, or text spaced around a central location. Can also plot wind
@@ -24,7 +23,10 @@ class StationPlot(object):
     """
 
     location_names = {'C': (0, 0), 'N': (0, 1), 'NE': (1, 1), 'E': (1, 0), 'SE': (1, -1),
-                      'S': (0, -1), 'SW': (-1, -1), 'W': (-1, 0), 'NW': (-1, 1)}
+                      'S': (0, -1), 'SW': (-1, -1), 'W': (-1, 0), 'NW': (-1, 1),
+                      'N2': (0, 2), 'NNE': (1, 2), 'ENE': (2, 1), 'E2': (2, 0),
+                      'ESE': (2, -1), 'SSE': (1, -2), 'S2': (0, -2), 'SSW': (-1, -2),
+                      'WSW': (-2, -1), 'W2': (-2, 0), 'WNW': (-2, 1), 'NNW': (-1, 2)}
 
     def __init__(self, ax, x, y, fontsize=10, spacing=None, transform=None, **kwargs):
         """Initialize the StationPlot with items that do not change.
@@ -55,8 +57,8 @@ class StationPlot(object):
 
         """
         self.ax = ax
-        self.x = atleast_1d(x)
-        self.y = atleast_1d(y)
+        self.x = np.atleast_1d(x)
+        self.y = np.atleast_1d(y)
         self.fontsize = fontsize
         self.spacing = fontsize if spacing is None else spacing
         self.transform = transform
@@ -183,6 +185,8 @@ class StationPlot(object):
             How to format the data as a string for plotting. If a string, it should be
             compatible with the :func:`format` builtin. If a callable, this should take a
             value and return a string. Defaults to '0.f'.
+        plot_units: `pint.unit`
+            Units to plot in (performing conversion if necessary). Defaults to given units.
         kwargs
             Additional keyword arguments to use for matplotlib's plotting functions.
 
@@ -192,6 +196,9 @@ class StationPlot(object):
         plot_barb, plot_symbol, plot_text
 
         """
+        # If plot_units specified, convert the data to those units
+        plotting_units = kwargs.pop('plot_units', None)
+        parameter = self._scalar_plotting_units(parameter, plotting_units)
         if hasattr(parameter, 'units'):
             parameter = parameter.magnitude
         text = self._to_string_list(parameter, formatter)
@@ -264,7 +271,7 @@ class StationPlot(object):
 
         # If plot_units specified, convert the data to those units
         plotting_units = kwargs.pop('plot_units', None)
-        u, v = self._plotting_units(u, v, plotting_units)
+        u, v = self._vector_plotting_units(u, v, plotting_units)
 
         # Empirically determined
         pivot = 0.51 * np.sqrt(self.fontsize)
@@ -307,7 +314,7 @@ class StationPlot(object):
 
         # If plot_units specified, convert the data to those units
         plotting_units = kwargs.pop('plot_units', None)
-        u, v = self._plotting_units(u, v, plotting_units)
+        u, v = self._vector_plotting_units(u, v, plotting_units)
 
         defaults = {'pivot': 'tail', 'scale': 20, 'scale_units': 'inches', 'width': 0.002}
         defaults.update(kwargs)
@@ -319,7 +326,7 @@ class StationPlot(object):
         self.arrows = self.ax.quiver(self.x, self.y, u, v, **defaults)
 
     @staticmethod
-    def _plotting_units(u, v, plotting_units):
+    def _vector_plotting_units(u, v, plotting_units):
         """Handle conversion to plotting units for barbs and arrows."""
         if plotting_units:
             if hasattr(u, 'units') and hasattr(v, 'units'):
@@ -333,6 +340,17 @@ class StationPlot(object):
         u = np.array(u)
         v = np.array(v)
         return u, v
+
+    @staticmethod
+    def _scalar_plotting_units(scalar_value, plotting_units):
+        """Handle conversion to plotting units for non-vector quantities."""
+        if plotting_units:
+            if hasattr(scalar_value, 'units'):
+                scalar_value = scalar_value.to(plotting_units)
+            else:
+                raise ValueError('To convert to plotting units, units must be attached to '
+                                 'scalar value being converted.')
+        return scalar_value
 
     def _make_kwargs(self, kwargs):
         """Assemble kwargs as necessary.

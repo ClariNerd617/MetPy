@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Tests for the `station_plot` module."""
 
-import cartopy.crs as ccrs
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,8 +12,11 @@ import pytest
 from metpy.plots import (current_weather, high_clouds, nws_layout, simple_layout,
                          sky_cover, StationPlot, StationPlotLayout)
 # Fixtures to make sure we have the right backend and consistent round
-from metpy.testing import patch_round, set_agg_backend  # noqa: F401, I202
+from metpy.testing import set_agg_backend  # noqa: F401, I202
 from metpy.units import units
+
+
+MPL_VERSION = matplotlib.__version__[:3]
 
 
 @pytest.mark.mpl_image_compare(tolerance=2.444, savefig_kwargs={'dpi': 300}, remove_text=True)
@@ -83,7 +85,28 @@ def test_station_plot_replace():
     return fig
 
 
-@pytest.mark.mpl_image_compare(tolerance=0, savefig_kwargs={'dpi': 300},
+@pytest.mark.mpl_image_compare(tolerance=0.25, savefig_kwargs={'dpi': 300}, remove_text=True)
+def test_station_plot_locations():
+    """Test that locations are properly replaced."""
+    fig = plt.figure(figsize=(3, 3))
+
+    locations = ['C', 'N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N2', 'NNE', 'ENE', 'E2',
+                 'ESE', 'SSE', 'S2', 'SSW', 'WSW', 'W2', 'WNW', 'NNW']
+    x_pos = np.array([0])
+    y_pos = np.array([0])
+
+    # Make the plot
+    sp = StationPlot(fig.add_subplot(1, 1, 1), x_pos, y_pos, fontsize=8, spacing=24)
+    for loc in locations:
+        sp.plot_text(loc, [loc])
+
+    sp.ax.set_xlim(-2, 2)
+    sp.ax.set_ylim(-2, 2)
+
+    return fig
+
+
+@pytest.mark.mpl_image_compare(tolerance=0.00413, savefig_kwargs={'dpi': 300},
                                remove_text=True)
 def test_stationlayout_api():
     """Test the StationPlot API."""
@@ -258,30 +281,32 @@ def wind_plot():
     return u, v, x, y
 
 
-@pytest.mark.mpl_image_compare(tolerance=0.00323, remove_text=True)
-def test_barb_projection(wind_plot):
+@pytest.mark.mpl_image_compare(tolerance={'2.1': 0.0423}.get(MPL_VERSION, 0.00434),
+                               remove_text=True)
+def test_barb_projection(wind_plot, ccrs):
     """Test that barbs are properly projected (#598)."""
     u, v, x, y = wind_plot
 
     # Plot and check barbs (they should align with grid lines)
     fig = plt.figure()
     ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
-    ax.gridlines(xlocs=[-135, -120, -105, -90, -75, -60, -45])
+    ax.gridlines(xlocs=[-120, -105, -90, -75, -60], ylocs=np.arange(24, 55, 6))
     sp = StationPlot(ax, x, y, transform=ccrs.PlateCarree())
     sp.plot_barb(u, v)
 
     return fig
 
 
-@pytest.mark.mpl_image_compare(tolerance=0.00205, remove_text=True)
-def test_arrow_projection(wind_plot):
+@pytest.mark.mpl_image_compare(tolerance={'2.1': 0.0693}.get(MPL_VERSION, 0.00382),
+                               remove_text=True)
+def test_arrow_projection(wind_plot, ccrs):
     """Test that arrows are properly projected."""
     u, v, x, y = wind_plot
 
     # Plot and check barbs (they should align with grid lines)
     fig = plt.figure()
     ax = fig.add_subplot(1, 1, 1, projection=ccrs.LambertConformal())
-    ax.gridlines(xlocs=[-135, -120, -105, -90, -75, -60, -45])
+    ax.gridlines(xlocs=[-120, -105, -90, -75, -60], ylocs=np.arange(24, 55, 6))
     sp = StationPlot(ax, x, y, transform=ccrs.PlateCarree())
     sp.plot_arrow(u, v)
     sp.plot_arrow(u, v)  # plot_arrow used twice to hit removal if statement
@@ -408,3 +433,38 @@ def test_symbol_pandas_timeseries():
     ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter('%-d'))
 
     return fig
+
+
+@pytest.mark.mpl_image_compare(tolerance=2.444, savefig_kwargs={'dpi': 300}, remove_text=True)
+def test_stationplot_unit_conversion():
+    """Test the StationPlot API."""
+    fig = plt.figure(figsize=(9, 9))
+
+    # testing data
+    x = np.array([1, 5])
+    y = np.array([2, 4])
+
+    # Make the plot
+    sp = StationPlot(fig.add_subplot(1, 1, 1), x, y, fontsize=16)
+    sp.plot_barb([20, 0], [0, -50])
+    sp.plot_text('E', ['KOKC', 'ICT'], color='blue')
+    sp.plot_parameter('NW', [10.5, 15] * units.degC, plot_units='degF', color='red')
+    sp.plot_symbol('S', [5, 7], high_clouds, color='green')
+
+    sp.ax.set_xlim(0, 6)
+    sp.ax.set_ylim(0, 6)
+
+    return fig
+
+
+def test_scalar_unit_conversion_exception():
+    """Test that errors are raise if unit conversion is requested on un-united data."""
+    T = 50
+    x_pos = np.array([0])
+    y_pos = np.array([0])
+
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    stnplot = StationPlot(ax, x_pos, y_pos)
+    with pytest.raises(ValueError):
+        stnplot.plot_parameter('C', T, plot_units='degC')

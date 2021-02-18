@@ -5,10 +5,14 @@
 
 import bz2
 from collections import namedtuple
+import contextlib
 import gzip
+from io import BytesIO
 import logging
 from struct import Struct
 import zlib
+
+import numpy as np
 
 log = logging.getLogger(__name__)
 
@@ -19,15 +23,38 @@ def open_as_needed(filename, mode='rb'):
     Handles opening with the right class based on the file extension.
 
     """
+    # Handle file-like objects
     if hasattr(filename, 'read'):
+        # See if the file object is really gzipped or bzipped.
+        lead = filename.read(4)
+
+        # If we can seek, seek back to start, otherwise read all the data into an
+        # in-memory file-like object.
+        if hasattr(filename, 'seek'):
+            filename.seek(0)
+        else:
+            filename = BytesIO(lead + filename.read())
+
+        # If the leading bytes match one of the signatures, pass into the appropriate class.
+        with contextlib.suppress(AttributeError):
+            lead = lead.encode('ascii')
+        if lead.startswith(b'\x1f\x8b'):
+            filename = gzip.GzipFile(fileobj=filename)
+        elif lead.startswith(b'BZh'):
+            filename = bz2.BZ2File(filename)
+
         return filename
+
+    # This will convert pathlib.Path instances to strings
+    filename = str(filename)
 
     if filename.endswith('.bz2'):
         return bz2.BZ2File(filename, mode)
     elif filename.endswith('.gz'):
         return gzip.GzipFile(filename, mode)
     else:
-        return open(filename, mode)
+        kwargs = {'errors': 'surrogateescape'} if mode != 'rb' else {}
+        return open(filename, mode, **kwargs)  # noqa: SIM115
 
 
 class NamedStruct(Struct):
@@ -73,6 +100,11 @@ class NamedStruct(Struct):
         """Unpack the next bytes from a file object."""
         return self.unpack(fobj.read(self.size))
 
+    def pack(self, **kwargs):
+        """Pack the arguments into bytes using the structure."""
+        t = self.make_tuple(**kwargs)
+        return super().pack(*t)
+
 
 # This works around times when we have more than 255 items and can't use
 # NamedStruct. This is a CPython limit for arguments.
@@ -92,7 +124,7 @@ class DictStruct(Struct):
         return dict(zip(self._names, items))
 
     def unpack(self, s):
-        """Parse bytes and return a namedtuple."""
+        """Parse bytes and return a dict."""
         return self._create(super().unpack(s))
 
     def unpack_from(self, buff, offset=0):
@@ -100,7 +132,7 @@ class DictStruct(Struct):
         return self._create(super().unpack_from(buff, offset))
 
 
-class Enum(object):
+class Enum:
     """Map values to specific strings."""
 
     def __init__(self, *args, **kwargs):
@@ -113,10 +145,10 @@ class Enum(object):
 
     def __call__(self, val):
         """Map an integer to the string representation."""
-        return self.val_map.get(val, 'Unknown ({})'.format(val))
+        return self.val_map.get(val, f'Unknown ({val})')
 
 
-class Bits(object):
+class Bits:
     """Breaks an integer into a specified number of True/False bits."""
 
     def __init__(self, num_bits):
@@ -128,7 +160,7 @@ class Bits(object):
         return [bool((val >> i) & 0x1) for i in self._bits]
 
 
-class BitField(object):
+class BitField:
     """Convert an integer to a string for each bit."""
 
     def __init__(self, *names):
@@ -152,7 +184,7 @@ class BitField(object):
         return bits[0] if len(bits) == 1 else bits
 
 
-class Array(object):
+class Array:
     """Use a Struct as a callable to unpack a bunch of bytes as a list."""
 
     def __init__(self, fmt):
@@ -164,19 +196,23 @@ class Array(object):
         return list(self._struct.unpack(buf))
 
 
-class IOBuffer(object):
+class IOBuffer:
     """Holds bytes from a buffer to simplify parsing and random access."""
 
     def __init__(self, source):
         """Initialize the IOBuffer with the source data."""
         self._data = bytearray(source)
-        self._offset = 0
-        self.clear_marks()
+        self.reset()
 
     @classmethod
     def fromfile(cls, fobj):
         """Initialize the IOBuffer with the contents of the file object."""
         return cls(fobj.read())
+
+    def reset(self):
+        """Reset buffer back to initial state."""
+        self._offset = 0
+        self.clear_marks()
 
     def set_mark(self):
         """Mark the current location and return its id so that the buffer can return later."""
@@ -230,9 +266,15 @@ class IOBuffer(object):
 
         return list(self.read_struct(Struct(order + '{:d}'.format(int(num)) + item_type)))
 
-    def read_int(self, code):
+    def read_int(self, size, endian, signed):
         """Parse the current buffer offset as the specified integer code."""
-        return self.read_struct(Struct(code))[0]
+        return int.from_bytes(self.read(size), endian, signed=signed)
+
+    def read_array(self, count, dtype):
+        """Read an array of values from the buffer."""
+        ret = np.frombuffer(self._data, offset=self._offset, dtype=dtype, count=count)
+        self.skip(ret.nbytes)
+        return ret
 
     def read(self, num_bytes=None):
         """Read and return the specified bytes from the buffer."""
@@ -303,7 +345,9 @@ def zlib_decompress_all_frames(data):
         try:
             frames.extend(decomp.decompress(data))
             data = decomp.unused_data
+            log.debug('Decompressed zlib frame. %d bytes remain.', len(data))
         except zlib.error:
+            log.debug('Remaining %d bytes are not zlib compressed.', len(data))
             frames.extend(data)
             break
     return frames
